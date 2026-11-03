@@ -103,6 +103,8 @@ export default function Questionnaire() {
 
   const [projectsList, setProjectsList] = useState([]);
   const [richMenusList, setRichMenusList] = useState([]);
+  const [lineGroupsList, setLineGroupsList] = useState([]);
+  const [cardGroupMap, setCardGroupMap] = useState({});
 
   const [form, setForm] = useState({
     title: '',
@@ -116,6 +118,7 @@ export default function Questionnaire() {
     finishTags: [],
     finishJourney: '',
     finishMenu: '',
+    targetGroupId: '',
     questions: [emptyQuestion()],
   });
 
@@ -133,12 +136,14 @@ export default function Questionnaire() {
 
   const fetchProjectsAndMenus = async () => {
     try {
-      const [projRes, rmRes] = await Promise.all([
+      const [projRes, rmRes, grpRes] = await Promise.all([
         api.get('/projects', authHeaders),
         api.get('/richmenu/metadata', authHeaders),
+        api.get('/liff-questionnaires/line-groups', authHeaders).catch(() => ({ data: { groups: [] } })),
       ]);
       setProjectsList(Array.isArray(projRes.data) ? projRes.data : (projRes.data?.projects || []));
       setRichMenusList(Array.isArray(rmRes.data) ? rmRes.data : []);
+      setLineGroupsList(Array.isArray(grpRes.data?.groups) ? grpRes.data.groups : []);
     } catch (e) {
       console.error('Failed to fetch projects or rich menus:', e);
     }
@@ -158,12 +163,16 @@ export default function Questionnaire() {
     }));
   };
 
-  const makeLiffUrl = (survey) => {
+  const makeLiffUrl = (survey, overrideGroupId = undefined) => {
     const url = new URL(LIFF_ENTRY_URL);
     url.searchParams.set('oaId', oaId);
     url.searchParams.set('surveyId', survey.survey_key);
     const appName = survey.bot_app_name || botAppName;
     if (appName) url.searchParams.set('botAppName', appName);
+    const selectedGroupId = overrideGroupId !== undefined
+      ? overrideGroupId
+      : (cardGroupMap[survey.survey_key] !== undefined ? cardGroupMap[survey.survey_key] : (survey.target_group_id || ''));
+    if (selectedGroupId) url.searchParams.set('groupId', selectedGroupId);
 
     // 自動獲取後端 API Origin 並帶入 query string
     let backendUrl = '';
@@ -238,6 +247,7 @@ export default function Questionnaire() {
         finishTags: detail.finish_tags || detail.default_tags || [],
         finishJourney: detail.finish_journey ? String(detail.finish_journey) : '',
         finishMenu: detail.finish_menu ? String(detail.finish_menu) : '',
+        targetGroupId: detail.target_group_id ? String(detail.target_group_id) : '',
         questions: detail.questions.map(q => ({
           id: q.id,
           content: q.content || '',
@@ -275,6 +285,7 @@ export default function Questionnaire() {
       finishTags: [],
       finishJourney: '',
       finishMenu: '',
+    targetGroupId: '',
       questions: [emptyQuestion()],
     });
   };
@@ -305,6 +316,7 @@ export default function Questionnaire() {
         finish_tags: form.finishTags,
         finish_journey: form.finishJourney,
         finish_menu: form.finishMenu,
+        target_group_id: form.targetGroupId || '',
         default_tags: form.finishTags,
         questions: form.questions.map((q, index) => ({
           id: q.id,
@@ -505,6 +517,28 @@ export default function Questionnaire() {
               />
               <Typography sx={{ color: '#888', fontSize: '0.75rem', mt: 0.5 }}>無論回答哪些題目，送出問卷時皆會標註此標籤</Typography>
             </Box>
+            <Box sx={{ mb: 2 }}>
+              <FormControl fullWidth size="small" sx={fieldSx}>
+                <InputLabel sx={{ color: '#B0B0B0' }}>推播目標群組 (選填)</InputLabel>
+                <Select
+                  value={form.targetGroupId || ''}
+                  label="推播目標群組 (選填)"
+                  onChange={e => setForm({ ...form, targetGroupId: e.target.value })}
+                  sx={selectSx}
+                  MenuProps={{ PaperProps: { sx: { bgcolor: '#222', color: 'white' } } }}
+                >
+                  <MenuItem value="">-- 不指定群組 (推播給填寫者個人) --</MenuItem>
+                  {lineGroupsList.map(g => (
+                    <MenuItem key={g.group_id} value={g.group_id}>
+                      {g.group_name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Typography sx={{ color: '#888', fontSize: '0.75rem', mt: 0.5 }}>
+                選擇目標群組後，複製的 LIFF 連結將自動帶入該群組 groupId，填寫完成後機器人會將結果推播至該群組
+              </Typography>
+            </Box>
             <Box sx={{ display: 'flex', gap: 2, flexWrap: { xs: 'wrap', sm: 'nowrap' } }}>
               <FormControl fullWidth size="small" sx={{ ...fieldSx, flex: 1 }}>
                 <InputLabel sx={{ color: '#B0B0B0' }}>加入自動旅程</InputLabel>
@@ -637,6 +671,8 @@ export default function Questionnaire() {
             const finishJourneyObj = projectsList.find(p => String(p.project_id || p.id) === String(survey.finish_journey));
             const finishMenuObj = richMenusList.find(m => String(m.ui_uuid || m.richMenuId || m.rich_menu_id || m.id) === String(survey.finish_menu));
             const finishTagsList = survey.finish_tags || survey.default_tags || [];
+            const currentCardGroupId = cardGroupMap[survey.survey_key] !== undefined ? cardGroupMap[survey.survey_key] : (survey.target_group_id || '');
+            const targetGroupObj = lineGroupsList.find(g => g.group_id === currentCardGroupId);
 
             return (
             <Paper key={survey.survey_key} sx={{ p: 2, mb: 2, background: '#222', border: '1px solid #444' }}>
@@ -650,10 +686,28 @@ export default function Questionnaire() {
                     {finishTagsList.map(tag => <Chip key={tag} size="small" label={`完成標籤: ${tag}`} sx={{ background: '#2e4c38', color: '#a5d6a7' }} />)}
                     {finishJourneyObj && <Chip size="small" label={`旅程: ${finishJourneyObj.project_name}`} sx={{ background: '#303f9f', color: '#c5cae9' }} />}
                     {finishMenuObj && <Chip size="small" label={`選單: ${finishMenuObj.name || finishMenuObj.richMenuId || finishMenuObj.rich_menu_id}`} sx={{ background: '#512da8', color: '#d1c4e9' }} />}
+                    {currentCardGroupId && <Chip size="small" label={`目標群組: ${targetGroupObj ? targetGroupObj.group_name : currentCardGroupId.slice(0, 8) + '...'}`} sx={{ background: '#00695c', color: '#b2dfdb' }} />}
                     {(survey.question_tags || []).map(tag => <Chip key={tag} size="small" label={`題目標籤: ${tag}`} sx={{ background: '#4b3f12', color: '#ffe082' }} />)}
                   </Box>
                 </Box>
-                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                  <FormControl size="small" sx={{ ...fieldSx, minWidth: 165, mr: 0.5 }}>
+                    <InputLabel sx={{ color: '#B0B0B0' }}>推播目標群組</InputLabel>
+                    <Select
+                      value={currentCardGroupId}
+                      label="推播目標群組"
+                      onChange={e => setCardGroupMap(prev => ({ ...prev, [survey.survey_key]: e.target.value }))}
+                      sx={selectSx}
+                      MenuProps={{ PaperProps: { sx: { bgcolor: '#222', color: 'white' } } }}
+                    >
+                      <MenuItem value="">-- 不指定群組 --</MenuItem>
+                      {lineGroupsList.map(g => (
+                        <MenuItem key={g.group_id} value={g.group_id}>
+                          {g.group_name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
                   <Tooltip title="編輯問卷">
                     <IconButton onClick={() => handleStartEdit(survey)} sx={{ color: '#4fc3f7' }}><EditIcon /></IconButton>
                   </Tooltip>
@@ -708,6 +762,11 @@ export default function Questionnaire() {
                     <TableCell sx={{ color: '#ccc', verticalAlign: 'top' }}>
                       {(row.source_meta?.default_tags || []).map(tag => <Chip key={tag} size="small" label={tag} sx={{ mr: 0.5, mb: 0.5, background: '#4b3f12', color: '#ffe082' }} />)}
                       {row.source_meta?.bot_app_name && <Typography sx={{ color: '#888', fontSize: '0.75rem' }}>bot: {row.source_meta.bot_app_name}</Typography>}
+                      {row.source_meta?.group_id && (
+                        <Typography sx={{ color: '#80cbc4', fontSize: '0.75rem' }}>
+                          群組: {(lineGroupsList.find(g => g.group_id === row.source_meta.group_id)?.group_name) || row.source_meta.group_id}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell sx={{ color: '#ddd' }}>
                       {row.answers.map(answer => (

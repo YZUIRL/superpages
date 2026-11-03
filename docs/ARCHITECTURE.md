@@ -486,3 +486,19 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 
 
 
+
+### 18.9 LIFF 問卷目標群組選單與完成結果群組推播架構 (2026-11-03 新增)
+- **需求背景與 LINE LIFF SDK 規範限制**：
+  - LINE 官方自 LIFF v2 起基於隱私考量，已從 `liff.getContext()` 回傳物件中移除 `groupId`、`roomId` 與 `utouId`。為達成「後台以群組名稱選取目標群組、LIFF 網址帶入 `groupId`、填畢後機器人將結果推播回該群組」之完整閉環，設計 URL Query 參數傳遞與 WebSocket `Sensor` 目標路由機制。
+- **LINE 群組動態探索與名稱解析端點 (`GET /api/liff-questionnaires/line-groups`, `backend/endpoints/liff_questionnaire.py`)**：
+  1. **候選群組探測与退群過濾**：自動掃描該官方帳號對應資料庫之 `"history:<app_id>"` 與 `"Private_var:<app_id>"`，提取所有 `C...` / `R...` 開頭（長度 33 字元）的群組 ID，並依據 `"history:<app_id>"` 中最新一筆 `Join`/`Leave` 事件動態排除最後狀態為 `Leave`（已退出）的群組。
+  2. **LINE Group Summary API 即時名稱解析與快取**：結合 `OAConfig.other_settings` 中的 `line_token`，呼叫 LINE Messaging API `GET https://api.line.me/v2/bot/group/{groupId}/summary` 取得群組顯示名稱 (`groupName`) 與頭像 (`pictureUrl`)，並實作 5 分鐘記憶體快取 (`_line_group_summary_cache`)。若 API 回應 404（機器人已不在群組內）則自動剔除，確保前端下拉選單僅呈現有效群組名稱。
+- **雙重群組選擇器與連結動態組裝 (`frontend/src/pages/LiffQuestionnaire.jsx`)**：
+  1. **建立/編輯問卷預設綁定**：於左側「問卷完成後動作」區塊新增「推播目標群組 (選填)」下拉選單（顯示 `group_name`，值為 `group_id`），並將 `target_group_id` 持久化儲存於 `"liff_questionnaires:<app_id>"` 資料表。
+  2. **問卷列表卡片即時切換**：於右側每張問卷卡片操作區旁提供「推播目標群組」下拉選單（預設代入該問卷綁定的 `target_group_id`，亦可隨時切換為其他群組或不指定群組）。
+  3. **LIFF 連結注入 `groupId`**：`makeLiffUrl(survey)` 自動讀取當前選定的群組 ID 並寫入 URL Query 參數 `?groupId=C...`。
+- **LIFF 填寫端與後端 Sensor 群組推播路由 (`YZUIRL/liff_questionnaire/index.html`, `backend/endpoints/liff_questionnaire.py`)**：
+  - **填寫端參數透傳**：`liff_questionnaire/index.html` 自 `window.location.search` 與 `liff.state` 解析 `groupId`，於提交問卷時透過 `payload.group_id` 與 Query String 回傳至後端 `POST /api/liff-questionnaires/public/<survey_key>/responses`。
+  - **個人歸因與群組推播分離**：
+    - 完成後標籤 (`_merge_user_tags`)、自動旅程 (`finish_journey`) 與圖文選單切換 (`finish_menu`) 維持綁定填寫者個人 `identity["line_user_id"]` (`U...`)。
+    - 發送 WebSocket `Sensor` 完成事件時，維持 `Liffquestionnaire|<survey_key>|<response_id>|<答案1>|<答案2>|...` 訊息格式不變，並將事件目標 `user` 指向 `target_group_id`（若未指定群組則回退為個人 `line_user_id`），使 `Line-Bot-Main` 在免修改核心程式碼的前提下，觸發 `Q_bank` 的 `Liffquestionnaire|*` 法則並直接將回應訊息推播至該 LINE 群組。
