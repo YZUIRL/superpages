@@ -129,6 +129,7 @@ def _ensure_tables(conn, app_id):
     cur.execute(f'ALTER TABLE "{t["questionnaires"]}" ADD COLUMN IF NOT EXISTS finish_tags JSONB NOT NULL DEFAULT \'[]\'::jsonb')
     cur.execute(f'ALTER TABLE "{t["questionnaires"]}" ADD COLUMN IF NOT EXISTS finish_journey TEXT')
     cur.execute(f'ALTER TABLE "{t["questionnaires"]}" ADD COLUMN IF NOT EXISTS finish_menu TEXT')
+    cur.execute(f'ALTER TABLE "{t["questionnaires"]}" ADD COLUMN IF NOT EXISTS target_group_id TEXT')
 
     # 建立平面化 VIEW 供方便的一鍵查詢作答結果
     view_name = f"v_liff_questionnaire_results:{app_id}"
@@ -353,6 +354,7 @@ def _survey_payload(survey, questions):
         "finish_tags": finish_tags,
         "finish_journey": survey.get("finish_journey") or "",
         "finish_menu": survey.get("finish_menu") or "",
+        "target_group_id": survey.get("target_group_id") or "",
         "bot_app_name": survey["bot_app_name"] or "",
         "liff_id": "",
         "start_time": survey["start_time"].isoformat(timespec="minutes") if survey["start_time"] else "",
@@ -380,6 +382,154 @@ def _survey_list_payload(row):
     payload["created_at"] = row["created_at"].isoformat(timespec="seconds") if row.get("created_at") else ""
     payload["updated_at"] = row["updated_at"].isoformat(timespec="seconds") if row.get("updated_at") else ""
     return payload
+
+
+_line_group_summary_cache = {}
+_LINE_GROUP_CACHE_TTL = 300  # 5 minutes
+
+
+@liff_questionnaire_bp.route("/line-groups", methods=["GET"], strict_slashes=False)
+@token_required
+def list_line_groups():
+    """
+    取得該官方帳號目前加入的 LINE 群組清單（包含 group_id 與 group_name）。
+    透過資料庫 history / Private_var 探索 C... 開頭的 groupId，
+    並結合 LINE Group Summary API 解析群組顯示名稱與過濾已退出的群組。
+    """
+    import time
+    conn = None
+    try:
+        _set_oa_context_from_request()
+        conn = get_db_connection()
+        app_id = _get_app_id()
+        _ensure_tables(conn, app_id)
+        t = _tables(app_id)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        candidate_ids = []
+        seen_ids = set()
+        left_ids = set()
+
+        # 1. 從 history 表探索群組 ID，並檢查最新 Join/Leave 狀態
+        history_table = f"history:{app_id}"
+        cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = %s", (history_table,))
+        if cur.fetchone():
+            cur.execute(
+                f'''
+                SELECT DISTINCT ON (user_id) user_id, category
+                FROM "{history_table}"
+                WHERE (user_id LIKE 'C%%' OR user_id LIKE 'R%%') AND length(user_id) = 33
+                  AND category IN ('Join', 'Leave')
+                ORDER BY user_id, timestamp DESC
+                '''
+            )
+            for r in cur.fetchall():
+                gid = r["user_id"]
+                if r.get("category") == "Leave":
+                    left_ids.add(gid)
+                elif gid not in seen_ids:
+                    seen_ids.add(gid)
+                    candidate_ids.append(gid)
+
+            cur.execute(
+                f'''
+                SELECT DISTINCT user_id
+                FROM "{history_table}"
+                WHERE (user_id LIKE 'C%%' OR user_id LIKE 'R%%') AND length(user_id) = 33
+                '''
+            )
+            for r in cur.fetchall():
+                gid = r["user_id"]
+                if gid not in seen_ids and gid not in left_ids:
+                    seen_ids.add(gid)
+                    candidate_ids.append(gid)
+
+        # 2. 從 Private_var 表探索群組 ID 與可能儲存的群組名稱
+        pv_names = {}
+        cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = %s", (t["private_var"],))
+        if cur.fetchone():
+            cur.execute(
+                f'''
+                SELECT user_id, name, value
+                FROM "{t["private_var"]}"
+                WHERE (user_id LIKE 'C%%' OR user_id LIKE 'R%%') AND length(user_id) = 33
+                '''
+            )
+            for r in cur.fetchall():
+                gid = r["user_id"]
+                if gid not in seen_ids and gid not in left_ids:
+                    seen_ids.add(gid)
+                    candidate_ids.append(gid)
+                if r.get("name") in ("name", "group_name") and r.get("value"):
+                    pv_names[gid] = str(r["value"]).strip()
+
+        # 3. 納入既有問卷已綁定的 target_group_id
+        cur.execute(f'SELECT DISTINCT target_group_id FROM "{t["questionnaires"]}" WHERE target_group_id IS NOT NULL AND target_group_id <> \'\'')
+        for r in cur.fetchall():
+            gid = (r.get("target_group_id") or "").strip()
+            if gid and gid not in seen_ids and gid not in left_ids:
+                seen_ids.add(gid)
+                candidate_ids.append(gid)
+
+        cur.close()
+
+        # 4. 透過 LINE Group Summary API 取得群組顯示名稱
+        oa_cfg = getattr(g, "current_oa_config", None)
+        settings = (oa_cfg.other_settings if oa_cfg and oa_cfg.other_settings else {}) or {}
+        line_token = settings.get("line_token")
+
+        now_ts = time.time()
+        groups = []
+        for gid in candidate_ids:
+            cache_key = (app_id, gid)
+            cached = _line_group_summary_cache.get(cache_key)
+            if cached and (now_ts - cached["ts"] < _LINE_GROUP_CACHE_TTL):
+                if cached["data"] is not None:
+                    groups.append(cached["data"])
+                continue
+
+            group_name = pv_names.get(gid) or ""
+            picture_url = ""
+            is_valid = True
+
+            if line_token and gid.startswith("C"):
+                try:
+                    resp = requests.get(
+                        f"https://api.line.me/v2/bot/group/{gid}/summary",
+                        headers={"Authorization": f"Bearer {line_token}"},
+                        timeout=4,
+                    )
+                    if resp.status_code == 200:
+                        info = resp.json()
+                        group_name = info.get("groupName") or group_name
+                        picture_url = info.get("pictureUrl") or ""
+                    elif resp.status_code == 404:
+                        # 機器人已不在該群組中
+                        is_valid = False
+                except Exception as ex:
+                    print(f"[liff_questionnaire] Fetch group summary failed for {gid}: {ex}")
+
+            if not is_valid:
+                _line_group_summary_cache[cache_key] = {"ts": now_ts, "data": None}
+                continue
+
+            if not group_name:
+                group_name = f"LINE 群組 ({gid[:8]}...)"
+
+            item = {
+                "group_id": gid,
+                "group_name": group_name,
+                "picture_url": picture_url,
+            }
+            _line_group_summary_cache[cache_key] = {"ts": now_ts, "data": item}
+            groups.append(item)
+
+        return jsonify({"groups": groups})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 @liff_questionnaire_bp.route("/", methods=["GET"], strict_slashes=False)
@@ -451,9 +601,9 @@ def create_survey():
         cur.execute(
             f'''
             INSERT INTO "{t["questionnaires"]}"
-                (survey_key, title, description, status, default_tags, finish_tags, finish_journey, finish_menu, bot_app_name,
+                (survey_key, title, description, status, default_tags, finish_tags, finish_journey, finish_menu, target_group_id, bot_app_name,
                  start_time, end_time, allow_multiple, finish_message, theme_color, bg_image, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING *
             ''',
             (
@@ -465,6 +615,7 @@ def create_survey():
                 Json(_json_list(data.get("finish_tags") if data.get("finish_tags") is not None else data.get("default_tags"))),
                 str(data.get("finish_journey") or "").strip(),
                 str(data.get("finish_menu") or "").strip(),
+                str(data.get("target_group_id") or "").strip(),
                 data.get("bot_app_name") or app_id,
                 _parse_time(data.get("start_time")),
                 _parse_time(data.get("end_time")),
@@ -597,6 +748,7 @@ def update_survey(survey_key):
                 finish_tags = %s,
                 finish_journey = %s,
                 finish_menu = %s,
+                target_group_id = %s,
                 start_time = %s,
                 end_time = %s,
                 allow_multiple = %s,
@@ -615,6 +767,7 @@ def update_survey(survey_key):
                 Json(_json_list(data.get("finish_tags") if data.get("finish_tags") is not None else data.get("default_tags"))),
                 str(data.get("finish_journey") or "").strip(),
                 str(data.get("finish_menu") or "").strip(),
+                str(data.get("target_group_id") or "").strip(),
                 _parse_time(data.get("start_time")),
                 _parse_time(data.get("end_time")),
                 bool(data.get("allow_multiple", True)),
@@ -939,6 +1092,14 @@ def public_submit_response(survey_key):
             "url_app_name": request.args.get("appName") or data.get("app_name"),
             "default_tags": collected_tags,
             "identity_trusted": identity["trusted"],
+            "group_id": (
+                request.args.get("groupId")
+                or request.args.get("group_id")
+                or data.get("group_id")
+                or data.get("groupId")
+                or survey.get("target_group_id")
+                or ""
+            ).strip(),
         }
         cur.execute(
             f'''
@@ -992,6 +1153,7 @@ def public_submit_response(survey_key):
                 print(f"[liff_questionnaire] Enroll journey failed: {ej}")
 
         # 3. 自動切換圖文選單 (Finish Rich Menu)
+        sensor_target_user = identity["line_user_id"]
         finish_menu = survey.get("finish_menu")
         if finish_menu and str(finish_menu).strip():
             try:
@@ -1014,7 +1176,7 @@ def public_submit_response(survey_key):
                 send_socket_event({
                     "type": "Postback",
                     "message": f"switch_rm|{menu_val}",
-                    "user": identity["line_user_id"],
+                    "user": sensor_target_user,
                     "bot_name": target_bot,
                 })
             except Exception as em:
@@ -1031,11 +1193,12 @@ def public_submit_response(survey_key):
             clean_answers = [str(val if val is not None else "").replace("|", "/") for _, val in validated]
             survey_key = str(survey.get("survey_key") or "").replace("|", "/")
             socket_msg = "|".join(["Liffquestionnaire", survey_key, str(response["id"])] + clean_answers)
+            sensor_target_user = source_meta.get("group_id") or identity["line_user_id"]
 
             send_socket_event({
                 "type": "Sensor",
                 "message": socket_msg,
-                "user": identity["line_user_id"],
+                "user": sensor_target_user,
                 "bot_name": target_bot,
             })
             print(f"[liff_questionnaire] Emitted completion Sensor event: {socket_msg} to {target_bot}")

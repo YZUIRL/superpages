@@ -735,3 +735,17 @@
   - `frontend/src/pages/RuleDesigner.jsx` 新增 `window.onbeforeunload` 監聽，在編輯中或開啟彈窗時阻止誤觸 F5、重新整理或關閉視窗造成草稿遺失。
 - **網路異常與斷線全域處理**：
   - `frontend/src/api.js` 新增網路斷線與 502/503 伺服器異常事件派發，提升系統在極端網路狀況下的健壯性。
+
+
+## [2026-11-03] LIFF 問卷目標群組下拉選單與填畢結果推播回群組功能
+- **後端 LINE 群組清單探測與名稱解析 (`backend/endpoints/liff_questionnaire.py`)**:
+  - 新增 `GET /api/liff-questionnaires/line-groups` 端點，自動從該官方帳號之 `"history:<app_id>"` 與 `"Private_var:<app_id>"` 探索機器人所在的 `C...` / `R...` 群組 ID，並排除最新狀態為 `Leave` 的已退出群組。
+  - 串接 LINE Messaging API `GET https://api.line.me/v2/bot/group/{groupId}/summary` 即時解析群組顯示名稱 (`groupName`) 與頭像（含 5 分鐘快取與 404 自動過濾），供前端下拉選單顯示群組名稱。
+  - 擴充 `"liff_questionnaires:<app_id>"` 資料表新增 `target_group_id TEXT` 欄位，支援建立與更新問卷時儲存綁定之預設目標群組。
+- **前端雙位置目標群組下拉選單與 LIFF URL 注入 (`frontend/src/pages/LiffQuestionnaire.jsx`)**:
+  - 於左側「建立/編輯問卷」的「問卷完成後動作」區塊新增「推播目標群組 (選填)」下拉選單（顯示群組名稱、值為 `groupId`）。
+  - 於右側「已建立問卷」列表每張問卷卡片的操作按鈕旁新增「推播目標群組」快速切換下拉選單，並於卡片標籤顯示目標群組名稱。
+  - 升級 `makeLiffUrl(survey)`，當有選定目標群組時自動於產生的 LIFF 網址附加 `&groupId=<群組ID>`；於「查看作答」對話框同步顯示填寫來源群組名稱。
+- **LIFF 填寫端參數傳遞與 WebSocket Sensor 群組推播 (`YZUIRL/liff_questionnaire/index.html`, `backend/endpoints/liff_questionnaire.py`)**:
+  - 升級 `YZUIRL/liff_questionnaire/index.html` 解析網址與 `liff.state` 中的 `groupId` 參數，於提交問卷時一併送交後端 `public_submit_response`。
+  - 後端在維持 `Liffquestionnaire|<survey_key>|<存在資料庫的id>|<答案1>|<答案2>|...` 事件格式不變的前提下，當具備 `groupId` 時將 WebSocket `Sensor` 事件的目標 `user` 設為該 `groupId`，使機器人觸發 `Q_bank` 法則時直接將結果推播至該 LINE 群組（個人標籤、旅程與圖文選單仍綁定填寫者個人 `line_user_id`）。
