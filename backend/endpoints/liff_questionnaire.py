@@ -1092,7 +1092,18 @@ def public_submit_response(survey_key):
             "url_app_name": request.args.get("appName") or data.get("app_name"),
             "default_tags": collected_tags,
             "identity_trusted": identity["trusted"],
-            "group_id": (
+        }
+        raw_group_id = (
+            request.args.get("groupId")
+            or request.args.get("group_id")
+            or data.get("group_id")
+            or data.get("groupId")
+            or survey.get("target_group_id")
+            or ""
+        ).strip()
+        source_meta["identity_trusted"] = identity["trusted"]
+        source_meta["group_id"] = raw_group_id if re.match(r"^[CR][0-9a-fA-F]{10,}$", raw_group_id) else ""
+        _unused_group_meta = {"group_id": (
                 request.args.get("groupId")
                 or request.args.get("group_id")
                 or data.get("group_id")
