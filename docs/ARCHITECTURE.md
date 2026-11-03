@@ -524,3 +524,7 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - **跨場景自動適應 (`liff_questionnaire/index.html`, `backend/endpoints/liff_questionnaire.py`)**：
   - **在任一 LINE 群組由機器人發送**：`<%m.groupid%>` 自動替換為該群組 `C...` ID，填畢後觸發該群組的 `Liffquestionnaire|...` `Sensor` 事件並推播回該群組。
   - **在個人一對一對話由機器人發送**：`<%m.groupid%>` 替換為 `None`；前後端皆以正規表示式 `^[CR][0-9a-fA-F]{10,}$` 檢驗 `groupId`，非 `C`/`R` 開頭之合法群組 ID（如 `None` 或未替換的 `<%m.groupid%>`）一律自動視為空字串 `""`，將 `Sensor` 事件推播回填答者個人對話（`line_user_id`）。
+
+
+## [2026-11-03] 精簡 LIFF 問卷管理頁面提示文字
+- 移除 `frontend/src/pages/LiffQuestionnaire.jsx` 右側上方的 `Alert` 說明框，並將複製連結按鈕 Tooltip 還原為「複製 LIFF 連結」。
