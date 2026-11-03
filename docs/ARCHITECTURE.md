@@ -491,3 +491,7 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 
 ## [2026-11-03] 精簡 LIFF 問卷管理頁面提示文字
 - 移除 `frontend/src/pages/LiffQuestionnaire.jsx` 右側上方的 `Alert` 說明框，並將複製連結按鈕 Tooltip 還原為「複製 LIFF 連結」。
+
+
+## [2026-11-03] 配合 LIFF 問卷 Minimal Clean Form UI 調整預設外圍主題底色
+- 將 `frontend/src/pages/LiffQuestionnaire.jsx` 的預設 `themeColor` 由 `#FFD700` 調整為 `#F8FAFC`，配合新版白色極簡表單風格。

@@ -772,3 +772,9 @@
 
 ### 修改 (Changed)
 - **移除畫面提示文字** (`frontend/src/pages/LiffQuestionnaire.jsx`)：移除右側上方說明提示框，並將複製按鈕提示文字簡化為「複製 LIFF 連結」。
+
+
+## [2026-11-03] - 配合 LIFF 問卷 Minimal Clean Form UI 調整預設主題底色
+
+### 修改 (Changed)
+- **預設問卷主題色調整** (`frontend/src/pages/LiffQuestionnaire.jsx`)：將建立問卷預設 `themeColor` 由 `#FFD700` 調整為 `#F8FAFC` 淺灰白底色，搭配 LIFF 問卷新版白色極簡風格。
