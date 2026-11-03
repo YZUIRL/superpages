@@ -532,3 +532,5 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 
 ## [2026-11-03] 配合 LIFF 問卷 Minimal Clean Form UI 調整預設外圍主題底色
 - 將 `frontend/src/pages/LiffQuestionnaire.jsx` 的預設 `themeColor` 由 `#FFD700` 調整為 `#F8FAFC`，配合新版白色極簡表單風格。
+
+- 調整 `backend/endpoints/liff_questionnaire.py` (`public_submit_response`) 發送 WebSocket `Sensor` 事件之結構：維持 `"user": identity["line_user_id"]` 為填答者個人 LINE UID，並以獨立欄位 `"groupid": source_meta.get("group_id") or None` 傳遞來源群組 ID，確保 `Line-Bot-Main` 執行法則表時能正確以個人 `user_id` 讀取 `Private_var` (`pri(...)`) 與狀態機，同時將回覆與後續非同步 API 事件發送至目標群組。
