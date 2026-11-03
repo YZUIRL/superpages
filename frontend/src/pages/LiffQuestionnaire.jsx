@@ -112,7 +112,7 @@ export default function Questionnaire() {
     startTime: '',
     endTime: '',
     finishMessage: '感謝你的填寫',
-    themeColor: '#FFD700',
+    themeColor: '#F8FAFC',
     bgImage: '',
     finishTags: [],
     finishJourney: '',
@@ -236,7 +236,7 @@ export default function Questionnaire() {
         startTime: detail.start_time ? detail.start_time.replace(' ', 'T') : '',
         endTime: detail.end_time ? detail.end_time.replace(' ', 'T') : '',
         finishMessage: detail.finish_message || '感謝你的填寫',
-        themeColor: detail.theme_color || '#FFD700',
+        themeColor: detail.theme_color || '#F8FAFC',
         bgImage: detail.bg_image || '',
         finishTags: detail.finish_tags || detail.default_tags || [],
         finishJourney: detail.finish_journey ? String(detail.finish_journey) : '',
@@ -273,7 +273,7 @@ export default function Questionnaire() {
       startTime: '',
       endTime: '',
       finishMessage: '感謝你的填寫',
-      themeColor: '#FFD700',
+      themeColor: '#F8FAFC',
       bgImage: '',
       finishTags: [],
       finishJourney: '',
@@ -464,11 +464,11 @@ export default function Questionnaire() {
               value={form.themeColor} 
               onChange={e => setForm({ ...form, themeColor: e.target.value })} 
               sx={{ ...fieldSx, flex: 1 }} 
-              placeholder="#FFD700"
+              placeholder="#F8FAFC"
             />
             <input 
               type="color" 
-              value={/^#[0-9A-Fa-f]{6}$/.test(form.themeColor) ? form.themeColor : '#FFD700'} 
+              value={/^#[0-9A-Fa-f]{6}$/.test(form.themeColor) ? form.themeColor : '#F8FAFC'} 
               onChange={e => setForm({ ...form, themeColor: e.target.value.toUpperCase() })} 
               style={{ width: '40px', height: '40px', padding: 0, border: 'none', cursor: 'pointer', backgroundColor: 'transparent' }} 
               title="選擇顏色"
