@@ -104,7 +104,6 @@ export default function Questionnaire() {
   const [projectsList, setProjectsList] = useState([]);
   const [richMenusList, setRichMenusList] = useState([]);
   const [lineGroupsList, setLineGroupsList] = useState([]);
-  const [cardGroupMap, setCardGroupMap] = useState({});
 
   const [form, setForm] = useState({
     title: '',
@@ -118,7 +117,6 @@ export default function Questionnaire() {
     finishTags: [],
     finishJourney: '',
     finishMenu: '',
-    targetGroupId: '',
     questions: [emptyQuestion()],
   });
 
@@ -163,16 +161,12 @@ export default function Questionnaire() {
     }));
   };
 
-  const makeLiffUrl = (survey, overrideGroupId = undefined) => {
+  const makeLiffUrl = (survey, includeDynamicGroup = true) => {
     const url = new URL(LIFF_ENTRY_URL);
     url.searchParams.set('oaId', oaId);
     url.searchParams.set('surveyId', survey.survey_key);
     const appName = survey.bot_app_name || botAppName;
     if (appName) url.searchParams.set('botAppName', appName);
-    const selectedGroupId = overrideGroupId !== undefined
-      ? overrideGroupId
-      : (cardGroupMap[survey.survey_key] !== undefined ? cardGroupMap[survey.survey_key] : (survey.target_group_id || ''));
-    if (selectedGroupId) url.searchParams.set('groupId', selectedGroupId);
 
     // 自動獲取後端 API Origin 並帶入 query string
     let backendUrl = '';
@@ -193,7 +187,7 @@ export default function Questionnaire() {
       url.searchParams.set('backend', backendUrl);
     }
 
-    return url.toString();
+    return includeDynamicGroup ? `${url.toString()}&groupId=<%m.groupid%>` : url.toString();
   };
 
   const copyText = async (text, message = '已複製') => {
@@ -247,7 +241,6 @@ export default function Questionnaire() {
         finishTags: detail.finish_tags || detail.default_tags || [],
         finishJourney: detail.finish_journey ? String(detail.finish_journey) : '',
         finishMenu: detail.finish_menu ? String(detail.finish_menu) : '',
-        targetGroupId: detail.target_group_id ? String(detail.target_group_id) : '',
         questions: detail.questions.map(q => ({
           id: q.id,
           content: q.content || '',
@@ -285,7 +278,6 @@ export default function Questionnaire() {
       finishTags: [],
       finishJourney: '',
       finishMenu: '',
-    targetGroupId: '',
       questions: [emptyQuestion()],
     });
   };
@@ -316,7 +308,6 @@ export default function Questionnaire() {
         finish_tags: form.finishTags,
         finish_journey: form.finishJourney,
         finish_menu: form.finishMenu,
-        target_group_id: form.targetGroupId || '',
         default_tags: form.finishTags,
         questions: form.questions.map((q, index) => ({
           id: q.id,
@@ -517,28 +508,6 @@ export default function Questionnaire() {
               />
               <Typography sx={{ color: '#888', fontSize: '0.75rem', mt: 0.5 }}>無論回答哪些題目，送出問卷時皆會標註此標籤</Typography>
             </Box>
-            <Box sx={{ mb: 2 }}>
-              <FormControl fullWidth size="small" sx={fieldSx}>
-                <InputLabel sx={{ color: '#B0B0B0' }}>推播目標群組 (選填)</InputLabel>
-                <Select
-                  value={form.targetGroupId || ''}
-                  label="推播目標群組 (選填)"
-                  onChange={e => setForm({ ...form, targetGroupId: e.target.value })}
-                  sx={selectSx}
-                  MenuProps={{ PaperProps: { sx: { bgcolor: '#222', color: 'white' } } }}
-                >
-                  <MenuItem value="">-- 不指定群組 (推播給填寫者個人) --</MenuItem>
-                  {lineGroupsList.map(g => (
-                    <MenuItem key={g.group_id} value={g.group_id}>
-                      {g.group_name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <Typography sx={{ color: '#888', fontSize: '0.75rem', mt: 0.5 }}>
-                選擇目標群組後，複製的 LIFF 連結將自動帶入該群組 groupId，填寫完成後機器人會將結果推播至該群組
-              </Typography>
-            </Box>
             <Box sx={{ display: 'flex', gap: 2, flexWrap: { xs: 'wrap', sm: 'nowrap' } }}>
               <FormControl fullWidth size="small" sx={{ ...fieldSx, flex: 1 }}>
                 <InputLabel sx={{ color: '#B0B0B0' }}>加入自動旅程</InputLabel>
@@ -638,7 +607,7 @@ export default function Questionnaire() {
 
       <Box>
         <Alert severity="info" sx={{ mb: 2, background: '#1e2a38', color: '#d7e3f4' }}>
-          新版問卷不再寫入 Q_bank；題目、限制和回答都存在 LIFF 問卷專用表。支援問卷完成後自動上標、加入自動旅程與切換圖文選單。
+          新版問卷不再寫入 Q_bank；題目、限制和回答都存在 LIFF 問卷專用表。複製的 LIFF 連結已自動附帶 <code>&amp;groupId=&lt;%m.groupid%&gt;</code>，無論在個人對話或任一 LINE 群組由機器人發送，填完後皆會自動推播回該對話或群組。
         </Alert>
         {loading ? (
           <CircularProgress sx={{ color: 'var(--primary-yellow)' }} />
@@ -651,8 +620,6 @@ export default function Questionnaire() {
             
             if (survey.status === 'published') {
               const now = new Date();
-              // getTime() returns UTC time. survey.start_time / end_time might be returned as UTC strings or local strings.
-              // Assuming they are parsed correctly by Date() as local time.
               const start = survey.start_time ? new Date(survey.start_time) : null;
               const end = survey.end_time ? new Date(survey.end_time) : null;
               
@@ -671,8 +638,6 @@ export default function Questionnaire() {
             const finishJourneyObj = projectsList.find(p => String(p.project_id || p.id) === String(survey.finish_journey));
             const finishMenuObj = richMenusList.find(m => String(m.ui_uuid || m.richMenuId || m.rich_menu_id || m.id) === String(survey.finish_menu));
             const finishTagsList = survey.finish_tags || survey.default_tags || [];
-            const currentCardGroupId = cardGroupMap[survey.survey_key] !== undefined ? cardGroupMap[survey.survey_key] : (survey.target_group_id || '');
-            const targetGroupObj = lineGroupsList.find(g => g.group_id === currentCardGroupId);
 
             return (
             <Paper key={survey.survey_key} sx={{ p: 2, mb: 2, background: '#222', border: '1px solid #444' }}>
@@ -686,28 +651,10 @@ export default function Questionnaire() {
                     {finishTagsList.map(tag => <Chip key={tag} size="small" label={`完成標籤: ${tag}`} sx={{ background: '#2e4c38', color: '#a5d6a7' }} />)}
                     {finishJourneyObj && <Chip size="small" label={`旅程: ${finishJourneyObj.project_name}`} sx={{ background: '#303f9f', color: '#c5cae9' }} />}
                     {finishMenuObj && <Chip size="small" label={`選單: ${finishMenuObj.name || finishMenuObj.richMenuId || finishMenuObj.rich_menu_id}`} sx={{ background: '#512da8', color: '#d1c4e9' }} />}
-                    {currentCardGroupId && <Chip size="small" label={`目標群組: ${targetGroupObj ? targetGroupObj.group_name : currentCardGroupId.slice(0, 8) + '...'}`} sx={{ background: '#00695c', color: '#b2dfdb' }} />}
                     {(survey.question_tags || []).map(tag => <Chip key={tag} size="small" label={`題目標籤: ${tag}`} sx={{ background: '#4b3f12', color: '#ffe082' }} />)}
                   </Box>
                 </Box>
                 <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                  <FormControl size="small" sx={{ ...fieldSx, minWidth: 165, mr: 0.5 }}>
-                    <InputLabel sx={{ color: '#B0B0B0' }}>推播目標群組</InputLabel>
-                    <Select
-                      value={currentCardGroupId}
-                      label="推播目標群組"
-                      onChange={e => setCardGroupMap(prev => ({ ...prev, [survey.survey_key]: e.target.value }))}
-                      sx={selectSx}
-                      MenuProps={{ PaperProps: { sx: { bgcolor: '#222', color: 'white' } } }}
-                    >
-                      <MenuItem value="">-- 不指定群組 --</MenuItem>
-                      {lineGroupsList.map(g => (
-                        <MenuItem key={g.group_id} value={g.group_id}>
-                          {g.group_name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
                   <Tooltip title="編輯問卷">
                     <IconButton onClick={() => handleStartEdit(survey)} sx={{ color: '#4fc3f7' }}><EditIcon /></IconButton>
                   </Tooltip>
@@ -717,11 +664,11 @@ export default function Questionnaire() {
                   <Tooltip title="下載作答結果 (CSV)">
                     <IconButton onClick={() => handleDownload(survey)} sx={{ color: '#ba68c8' }}><DownloadIcon /></IconButton>
                   </Tooltip>
-                  <Tooltip title="複製 LIFF 連結">
-                    <IconButton onClick={() => copyText(makeLiffUrl(survey), 'LIFF 連結已複製')} sx={{ color: '#81c784' }}><ContentCopyIcon /></IconButton>
+                  <Tooltip title="複製 LIFF 連結 (含動態群組 <%m.groupid%>)">
+                    <IconButton onClick={() => copyText(makeLiffUrl(survey, true), 'LIFF 連結已複製')} sx={{ color: '#81c784' }}><ContentCopyIcon /></IconButton>
                   </Tooltip>
                   <Tooltip title="開啟 LIFF 連結">
-                    <IconButton component="a" href={makeLiffUrl(survey)} target="_blank" rel="noreferrer" sx={{ color: '#4fc3f7' }}><LaunchIcon /></IconButton>
+                    <IconButton component="a" href={makeLiffUrl(survey, false)} target="_blank" rel="noreferrer" sx={{ color: '#4fc3f7' }}><LaunchIcon /></IconButton>
                   </Tooltip>
                   <Tooltip title="刪除">
                     <IconButton onClick={() => handleDelete(survey)} sx={{ color: '#e57373' }}><DeleteIcon /></IconButton>

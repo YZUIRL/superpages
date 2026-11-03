@@ -784,3 +784,12 @@
 - **顯式指定 `postgresql+psycopg2://` 驅動與鎖定 `SQLAlchemy` 版本** (`backend/app.py`, `requirements.txt`, `backend/requirements.txt`)：
   - 解決 Heroku 重新部署時因 `Flask-SQLAlchemy==3.1.1` 自動拉取最新 `SQLAlchemy 2.1.x`，而 `SQLAlchemy 2.1` 將 `postgresql://` 預設驅動改為 `psycopg` (v3) 導致 `ModuleNotFoundError: No module named 'psycopg'` Worker 啟動失敗的問題。
   - 在 `backend/app.py` 將 `SQLALCHEMY_DATABASE_URI` 顯式設為 `postgresql+psycopg2://`，並於 `requirements.txt` 與 `backend/requirements.txt` 鎖定 `SQLAlchemy==2.0.36`。
+
+
+## [2026-11-03] - 統一改為動態群組參數 `&groupId=<%m.groupid%>` 並移除目標群組下拉選單
+
+### 修改 (Changed)
+- **LIFF 問卷連結統一附帶動態群組變數** (`frontend/src/pages/LiffQuestionnaire.jsx`, `backend/endpoints/liff_questionnaire.py`)：
+  - 移除新增/編輯表單與問卷卡片上的「推播目標群組」下拉選單。
+  - 複製 LIFF 連結時統一自動附上 `&groupId=<%m.groupid%>`，使同一個 URL 可同時用於個人對話與任意 LINE 群組。
+  - 後端新增 `^[CR][0-9a-fA-F]{10,}$` 格式驗證，當在個人對話觸發（`groupId=None`）或直接開啟（`groupId=<%m.groupid%>`）時自動回退為推播給填答者個人（`line_user_id`）。

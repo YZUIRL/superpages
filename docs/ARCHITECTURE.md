@@ -513,3 +513,14 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 ### 2. 雙重防護修正
 - **明確指定 SQLAlchemy 驅動 (`backend/app.py`)**：將 `app.config['SQLALCHEMY_DATABASE_URI']` 的 `postgresql://` 前綴顯式轉換為 `postgresql+psycopg2://`，同時保留原 `DATABASE_URL` (`postgresql://`) 供原生 `psycopg2.connect` 使用。
 - **版本鎖定 (`requirements.txt`, `backend/requirements.txt`)**：新增 `SQLAlchemy==2.0.36` 鎖定於 2.0 穩定分支，防止依賴自動跨版本升級造成行為變更。
+
+
+## [2026-11-03] 改為統一動態群組參數 `&groupId=<%m.groupid%>` 並移除手動下拉選單
+
+### 1. 架構簡化與跨群組通用連結設計
+- **移除手動群組下拉選單 (`frontend/src/pages/LiffQuestionnaire.jsx`)**：
+  - 移除左側表單與右側問卷卡片的「推播目標群組」下拉選單。
+  - `makeLiffUrl(survey, includeDynamicGroup=true)` 於複製連結時統一在尾端附加原字面量 `&groupId=<%m.groupid%>`（不經過 URL 編碼，以確保 `Line-Bot-Main` 的 `re_function_new` 可直接識別 `<%...%>` 語法）。
+- **跨場景自動適應 (`liff_questionnaire/index.html`, `backend/endpoints/liff_questionnaire.py`)**：
+  - **在任一 LINE 群組由機器人發送**：`<%m.groupid%>` 自動替換為該群組 `C...` ID，填畢後觸發該群組的 `Liffquestionnaire|...` `Sensor` 事件並推播回該群組。
+  - **在個人一對一對話由機器人發送**：`<%m.groupid%>` 替換為 `None`；前後端皆以正規表示式 `^[CR][0-9a-fA-F]{10,}$` 檢驗 `groupId`，非 `C`/`R` 開頭之合法群組 ID（如 `None` 或未替換的 `<%m.groupid%>`）一律自動視為空字串 `""`，將 `Sensor` 事件推播回填答者個人對話（`line_user_id`）。
