@@ -1204,11 +1204,12 @@ def public_submit_response(survey_key):
             clean_answers = [str(val if val is not None else "").replace("|", "/") for _, val in validated]
             survey_key = str(survey.get("survey_key") or "").replace("|", "/")
             socket_msg = "|".join(["Liffquestionnaire", survey_key, str(response["id"])] + clean_answers)
-            sensor_target_user = source_meta.get("group_id") or identity["line_user_id"]
+            sensor_group_id = source_meta.get("group_id") or None
 
             send_socket_event({
                 "type": "Sensor",
                 "message": socket_msg,
+                "groupid": sensor_group_id,
                 "user": sensor_target_user,
                 "bot_name": target_bot,
             })

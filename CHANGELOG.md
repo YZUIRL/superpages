@@ -778,3 +778,11 @@
 
 ### 修改 (Changed)
 - **預設問卷主題色調整** (`frontend/src/pages/LiffQuestionnaire.jsx`)：將建立問卷預設 `themeColor` 由 `#FFD700` 調整為 `#F8FAFC` 淺灰白底色，搭配 LIFF 問卷新版白色極簡風格。
+
+
+## [2026-11-03] - 修正 LIFF 問卷群組 Sensor 事件之 `user` 與 `groupid` 欄位分離傳遞
+
+### 修復 (Fixed)
+- **WebSocket Sensor 事件保留個人 `user` 並獨立傳遞 `groupid`** (`backend/endpoints/liff_questionnaire.py`)：
+  - 修正先前將 WebSocket `Sensor` 事件的 `"user"` 直接替換為 `group_id` 導致 `Line-Bot-Main` 以群組 ID 查詢 `Private_var`（使 `not pri('dashboard_async_action')` 因預設回傳 `'0'` 而判定為 `False`，進而無法匹配法則表）的問題。
+  - 改為固定傳送 `"user": identity["line_user_id"]` 並附帶 `"groupid": source_meta.get("group_id") or None`，配合 `Line-Bot-Main` 的 `handle_socket_message` 接收 `groupid`，讓法則表檢查與 `dashboard` API 呼叫維持使用填答者個人身分，且訊息回覆與後續非同步事件皆正確推播至來源群組。
