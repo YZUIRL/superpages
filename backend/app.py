@@ -96,7 +96,8 @@ if DATABASE_URL.startswith("postgres://"):
 # Configuration for SQLAlchemy
 app.config['SECRET_KEY'] = SECRET_KEY
 # RDS is the new Primary for Users, Pages, Permissions
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+SQLALCHEMY_DATABASE_URI = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1) if DATABASE_URL.startswith("postgresql://") else DATABASE_URL
+app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 10,

@@ -502,3 +502,14 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
   - **個人歸因與群組推播分離**：
     - 完成後標籤 (`_merge_user_tags`)、自動旅程 (`finish_journey`) 與圖文選單切換 (`finish_menu`) 維持綁定填寫者個人 `identity["line_user_id"]` (`U...`)。
     - 發送 WebSocket `Sensor` 完成事件時，維持 `Liffquestionnaire|<survey_key>|<response_id>|<答案1>|<答案2>|...` 訊息格式不變，並將事件目標 `user` 指向 `target_group_id`（若未指定群組則回退為個人 `line_user_id`），使 `Line-Bot-Main` 在免修改核心程式碼的前提下，觸發 `Q_bank` 的 `Liffquestionnaire|*` 法則並直接將回應訊息推播至該 LINE 群組。
+
+
+## [2026-11-03] 修復 Heroku 部署 SQLAlchemy 2.1 `ModuleNotFoundError: No module named 'psycopg'` 啟動崩潰
+
+### 1. 問題根因
+- `requirements.txt` 中 `Flask-SQLAlchemy==3.1.1` 未鎖定底層 `SQLAlchemy` 版本上限。當 Heroku 重新觸發建置時，自動安裝最新發佈的 `SQLAlchemy 2.1.x`（如 `2.1.6`）。
+- `SQLAlchemy 2.1` 將 `postgresql://` 連線字串的預設 DBAPI 驅動由 `psycopg2` 改為 `psycopg`（Psycopg 3），導致啟動時執行 `import psycopg` 而拋出 `ModuleNotFoundError: No module named 'psycopg'`。
+
+### 2. 雙重防護修正
+- **明確指定 SQLAlchemy 驅動 (`backend/app.py`)**：將 `app.config['SQLALCHEMY_DATABASE_URI']` 的 `postgresql://` 前綴顯式轉換為 `postgresql+psycopg2://`，同時保留原 `DATABASE_URL` (`postgresql://`) 供原生 `psycopg2.connect` 使用。
+- **版本鎖定 (`requirements.txt`, `backend/requirements.txt`)**：新增 `SQLAlchemy==2.0.36` 鎖定於 2.0 穩定分支，防止依賴自動跨版本升級造成行為變更。
