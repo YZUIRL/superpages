@@ -813,3 +813,10 @@
 - **WebSocket Sensor 事件保留個人 `user` 並獨立傳遞 `groupid`** (`backend/endpoints/liff_questionnaire.py`)：
   - 修正先前將 WebSocket `Sensor` 事件的 `"user"` 直接替換為 `group_id` 導致 `Line-Bot-Main` 以群組 ID 查詢 `Private_var`（使 `not pri('dashboard_async_action')` 因預設回傳 `'0'` 而判定為 `False`，進而無法匹配法則表）的問題。
   - 改為固定傳送 `"user": identity["line_user_id"]` 並附帶 `"groupid": source_meta.get("group_id") or None`，配合 `Line-Bot-Main` 的 `handle_socket_message` 接收 `groupid`，讓法則表檢查與 `dashboard` API 呼叫維持使用填答者個人身分，且訊息回覆與後續非同步事件皆正確推播至來源群組。
+
+
+## [2026-11-03] - LIFF 問卷答案類型拆分為「文字 (`text`)」與「多行文字 (`textarea`)」
+
+### 新增與修改 (Added & Changed)
+- **前端答案類型選項擴充** (`frontend/src/pages/LiffQuestionnaire.jsx`)：於 `answerTypes` 將原本的文字拆分為 `{ value: 'text', label: '文字' }`（單行不可換行）與 `{ value: 'textarea', label: '多行文字' }`（多行 `textarea`）。
+- **後端答案驗證支援 `textarea` 並過濾單行 `text` 換行** (`backend/endpoints/liff_questionnaire.py`)：於 `_validate_answer` 支援 `textarea` 多行文字類型，並針對單行 `text` 自動將換行符號正規化為單行文字。

@@ -61,6 +61,7 @@ const selectSx = {
 
 const answerTypes = [
   { value: 'text', label: '文字' },
+  { value: 'textarea', label: '多行文字' },
   { value: 'number', label: '數字' },
   { value: 'single_choice', label: '單選' },
   { value: 'multiple_choice', label: '多選' },
