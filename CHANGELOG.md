@@ -749,3 +749,11 @@
 - **LIFF 填寫端參數傳遞與 WebSocket Sensor 群組推播 (`YZUIRL/liff_questionnaire/index.html`, `backend/endpoints/liff_questionnaire.py`)**:
   - 升級 `YZUIRL/liff_questionnaire/index.html` 解析網址與 `liff.state` 中的 `groupId` 參數，於提交問卷時一併送交後端 `public_submit_response`。
   - 後端在維持 `Liffquestionnaire|<survey_key>|<存在資料庫的id>|<答案1>|<答案2>|...` 事件格式不變的前提下，當具備 `groupId` 時將 WebSocket `Sensor` 事件的目標 `user` 設為該 `groupId`，使機器人觸發 `Q_bank` 法則時直接將結果推播至該 LINE 群組（個人標籤、旅程與圖文選單仍綁定填寫者個人 `line_user_id`）。
+
+
+## [2026-11-03] - 修復 Heroku 部署 SQLAlchemy 2.1 預設驅動變更導致 `No module named 'psycopg'` 崩潰
+
+### 修復 (Fixed)
+- **顯式指定 `postgresql+psycopg2://` 驅動與鎖定 `SQLAlchemy` 版本** (`backend/app.py`, `requirements.txt`, `backend/requirements.txt`)：
+  - 解決 Heroku 重新部署時因 `Flask-SQLAlchemy==3.1.1` 自動拉取最新 `SQLAlchemy 2.1.x`，而 `SQLAlchemy 2.1` 將 `postgresql://` 預設驅動改為 `psycopg` (v3) 導致 `ModuleNotFoundError: No module named 'psycopg'` Worker 啟動失敗的問題。
+  - 在 `backend/app.py` 將 `SQLALCHEMY_DATABASE_URI` 顯式設為 `postgresql+psycopg2://`，並於 `requirements.txt` 與 `backend/requirements.txt` 鎖定 `SQLAlchemy==2.0.36`。
