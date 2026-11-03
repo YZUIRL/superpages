@@ -766,3 +766,9 @@
   - 移除新增/編輯表單與問卷卡片上的「推播目標群組」下拉選單。
   - 複製 LIFF 連結時統一自動附上 `&groupId=<%m.groupid%>`，使同一個 URL 可同時用於個人對話與任意 LINE 群組。
   - 後端新增 `^[CR][0-9a-fA-F]{10,}$` 格式驗證，當在個人對話觸發（`groupId=None`）或直接開啟（`groupId=<%m.groupid%>`）時自動回退為推播給填答者個人（`line_user_id`）。
+
+
+## [2026-11-03] - 精簡 LIFF 問卷管理介面提示文字
+
+### 修改 (Changed)
+- **移除畫面提示文字** (`frontend/src/pages/LiffQuestionnaire.jsx`)：移除右側上方說明提示框，並將複製按鈕提示文字簡化為「複製 LIFF 連結」。

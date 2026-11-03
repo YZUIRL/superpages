@@ -606,9 +606,6 @@ export default function Questionnaire() {
       </Box>
 
       <Box>
-        <Alert severity="info" sx={{ mb: 2, background: '#1e2a38', color: '#d7e3f4' }}>
-          新版問卷不再寫入 Q_bank；題目、限制和回答都存在 LIFF 問卷專用表。複製的 LIFF 連結已自動附帶 <code>&amp;groupId=&lt;%m.groupid%&gt;</code>，無論在個人對話或任一 LINE 群組由機器人發送，填完後皆會自動推播回該對話或群組。
-        </Alert>
         {loading ? (
           <CircularProgress sx={{ color: 'var(--primary-yellow)' }} />
         ) : surveys.length === 0 ? (
@@ -664,7 +661,7 @@ export default function Questionnaire() {
                   <Tooltip title="下載作答結果 (CSV)">
                     <IconButton onClick={() => handleDownload(survey)} sx={{ color: '#ba68c8' }}><DownloadIcon /></IconButton>
                   </Tooltip>
-                  <Tooltip title="複製 LIFF 連結 (含動態群組 <%m.groupid%>)">
+                  <Tooltip title="複製 LIFF 連結">
                     <IconButton onClick={() => copyText(makeLiffUrl(survey, true), 'LIFF 連結已複製')} sx={{ color: '#81c784' }}><ContentCopyIcon /></IconButton>
                   </Tooltip>
                   <Tooltip title="開啟 LIFF 連結">
