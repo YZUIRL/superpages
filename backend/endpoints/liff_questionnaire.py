@@ -182,7 +182,59 @@ def _json_list(value):
     return []
 
 
+def _extract_option_labels(options):
+    """自 options (無論是字串、字串陣列或結構化物件陣列) 提取出純文字清單供作答比對"""
+    if not options:
+        return []
+    if isinstance(options, str):
+        return [item.strip() for item in options.split(",") if item.strip()]
+    labels = []
+    for item in options:
+        if isinstance(item, dict):
+            text = item.get("text") or item.get("label") or ""
+            if str(text).strip():
+                labels.append(str(text).strip())
+        elif isinstance(item, str) and item.strip():
+            labels.append(item.strip())
+    return labels
+
+
+def _normalize_question_options(answer_type, options):
+    """標準化題目選項結構，單選題強制保存穩定 id、text、tag(0~1個)"""
+    if not options:
+        return []
+    if answer_type == "single_choice":
+        if isinstance(options, str):
+            raw_list = [item.strip() for item in options.split(",") if item.strip()]
+            return [{"id": f"opt_{uuid.uuid4().hex[:8]}", "text": t, "tag": None} for t in raw_list]
+        normalized = []
+        if isinstance(options, list):
+            for item in options:
+                if isinstance(item, dict):
+                    opt_id = str(item.get("id") or f"opt_{uuid.uuid4().hex[:8]}")
+                    text = str(item.get("text") or item.get("label") or "").strip()
+                    raw_tag = item.get("tag")
+                    tag = str(raw_tag).strip() if (raw_tag and str(raw_tag).strip()) else None
+                    if text:
+                        normalized.append({"id": opt_id, "text": text, "tag": tag})
+                elif isinstance(item, str) and item.strip():
+                    normalized.append({"id": f"opt_{uuid.uuid4().hex[:8]}", "text": item.strip(), "tag": None})
+        return normalized
+    # 非單選題：保留字串清單
+    if isinstance(options, list):
+        return [str(item.get("text") if isinstance(item, dict) else item).strip() for item in options if item]
+    if isinstance(options, str):
+        return [item.strip() for item in options.split(",") if item.strip()]
+    return []
+
+
 def _serialize_question(row):
+    raw_options = row["options"] or []
+    answer_type = row["answer_type"]
+    if answer_type == "single_choice":
+        options = _normalize_question_options("single_choice", raw_options)
+    else:
+        options = raw_options
     return {
         "id": row["id"],
         "question_no": row["question_no"],
@@ -191,7 +243,7 @@ def _serialize_question(row):
         "required": row["required"],
         "condition_type": row["condition_type"],
         "condition_detail": row["condition_detail"] or "",
-        "options": row["options"] or [],
+        "options": options,
         "tags": row["tags"] or [],
     }
 
@@ -219,6 +271,7 @@ def _validate_answer(question, value):
     condition_type = str(question["condition_type"] or "1")
     detail = question["condition_detail"] or ""
     options = question["options"] or []
+    option_labels = _extract_option_labels(options)
 
     if isinstance(value, list):
         normalized = [str(item).strip() for item in value if str(item).strip()]
@@ -238,11 +291,11 @@ def _validate_answer(question, value):
         if not re.fullmatch(r"-?\d+(\.\d+)?", text):
             return False, "請輸入數字"
     if answer_type == "single_choice" or (answer_type not in ("text", "textarea", "multiple_choice") and condition_type == "3"):
-        allowed = options or _json_list(detail)
+        allowed = option_labels or _json_list(detail)
         if text not in allowed:
             return False, "請選擇有效選項"
     if answer_type == "multiple_choice":
-        allowed = options or _json_list(detail)
+        allowed = option_labels or _json_list(detail)
         if normalized is None:
             normalized = _json_list(text)
         invalid = [item for item in normalized if item not in allowed]
@@ -373,6 +426,11 @@ def _question_tags_from_rows(questions):
     tags = []
     for question in questions or []:
         tags.extend(question.get("tags") or [])
+        options = question.get("options") or []
+        if isinstance(options, list):
+            for opt in options:
+                if isinstance(opt, dict) and opt.get("tag"):
+                    tags.append(str(opt.get("tag")).strip())
     return list(dict.fromkeys(str(tag).strip() for tag in tags if str(tag).strip()))
 
 
@@ -644,7 +702,7 @@ def create_survey():
                     bool(question.get("required", True)),
                     str(question.get("condition_type") or "1"),
                     question.get("condition_detail") or "",
-                    Json(_json_list(question.get("options"))),
+                    Json(_normalize_question_options(question.get("answer_type") or "text", question.get("options"))),
                     Json(_json_list(question.get("tags"))),
                 ),
             )
@@ -810,7 +868,7 @@ def update_survey(survey_key):
                         bool(question.get("required", True)),
                         str(question.get("condition_type") or "1"),
                         question.get("condition_detail") or "",
-                        Json(_json_list(question.get("options"))),
+                        Json(_normalize_question_options(question.get("answer_type") or "text", question.get("options"))),
                         Json(_json_list(question.get("tags"))),
                         q_id
                     )
@@ -832,7 +890,7 @@ def update_survey(survey_key):
                         bool(question.get("required", True)),
                         str(question.get("condition_type") or "1"),
                         question.get("condition_detail") or "",
-                        Json(_json_list(question.get("options"))),
+                        Json(_normalize_question_options(question.get("answer_type") or "text", question.get("options"))),
                         Json(_json_list(question.get("tags"))),
                     )
                 )

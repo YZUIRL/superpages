@@ -536,3 +536,28 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - 調整 `backend/endpoints/liff_questionnaire.py` (`public_submit_response`) 發送 WebSocket `Sensor` 事件之結構：維持 `"user": identity["line_user_id"]` 為填答者個人 LINE UID，並以獨立欄位 `"groupid": source_meta.get("group_id") or None` 傳遞來源群組 ID，確保 `Line-Bot-Main` 執行法則表時能正確以個人 `user_id` 讀取 `Private_var` (`pri(...)`) 與狀態機，同時將回覆與後續非同步 API 事件發送至目標群組。
 
 - 擴充 LIFF 問卷答案類型 (`frontend/src/pages/LiffQuestionnaire.jsx`, `backend/endpoints/liff_questionnaire.py`)：將原本單一「文字」拆分為「文字 (`text`)」（單行不可換行）與「多行文字 (`textarea`)」（多行可換行），後端 `_validate_answer` 對 `text` 自動將換行字元正規化為空白，對 `textarea` 保留多行文字。
+
+
+---
+## [2026-11-09] LIFF 問卷模組 (LIFF Survey) UI/UX 兩層式架構與單選題獨立標籤設定
+
+### 1. 兩層式資訊架構 (Two-Layer UI Architecture)
+- **Layer 1：LIFF 問卷管理列表 (`renderListView`)**
+  - 提供問卷卡片總覽，呈現問卷狀態（開放中/已結束/尚未開始/草稿）、題目數、作答總數、標籤（完成標籤、旅程、選單、題目標籤）與建立時間。
+  - 提供獨立的操作入口：「建立新問卷」、「編輯問卷」、「查看作答 (Dialog)」、「下載 CSV」、「複製 LIFF 連結」與「刪除問卷」。
+- **Layer 2：LIFF 問卷聚焦編輯器 (`renderEditorView`)**
+  - 頂部導航列包含「返回列表（含未儲存防呆）」、問卷名稱與「儲存問卷」按鈕。
+  - 左側欄整合問卷基本資訊（開始/結束時間、完成訊息、主題色、底圖、完成後動作）與「題目清單導航（Question Navigator）」。
+  - 右側工作區採用**逐題聚焦編輯模式 (Focus One Question at a Time)**，管理者切換題目時中央僅呈現該題內容與選項設定，徹底解決長表單垂直過度堆疊的問題。
+
+### 2. 單選選項獨立資料列化與穩定識別碼 (Stable Option ID)
+- 單選題選項從傳統的純文字逗號分隔字串升級為獨立資料列模型。
+- 每個選項皆具備前端生成的穩定唯一識別碼（`id: opt_xxxxxxxx`），避免過去僅仰賴陣列索引導致的標籤錯位問題。
+- 支援個別選項文字即時編輯、獨立新增、刪除（至少保留 1 個選項）與上下順序調整。
+
+### 3. 選項內 Accordion CRM 標籤設定 (0～1 個)
+- 每個單選選項提供獨立可折疊之 Accordion 設定區，預設收合以保持畫面整潔。
+- 展開後提供「此選項的 CRM 標籤設定」，整合 Autocomplete 元件自 `/customers/tags` 載入既有 CRM 標籤，並支援快速輸入與「清除標籤」功能。
+- 嚴格限制每個選項配置 **0～1 個既有 CRM 標籤**，未設定時維持 `null`。
+- 題目頂部提供視覺化「CRM 標籤配置進度列 (Progress Indicator)」（例：`3 / 5 個選項已設定標籤`），作為填答導引而非強制限制。
+

@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [2026-11-09] LIFF 問卷資料庫 options 結構化格式說明與前後端相容轉接器機制
+
+### 1. 資料庫結構化存儲與零中斷相容 (Schema & Storage Compatibility)
+- **資料庫欄位**：`liff_questionnaire_questions:{app_id}` 之 `options` 欄位原生採用 `JSONB`，無需執行任何破壞性 DDL 遷移。
+- **結構化資料規格**：單選題選項標準化為物件陣列：
+  ```json
+  [
+    { "id": "opt_a1b2c3d4", "text": "程式設計", "tag": "課程興趣-程式" },
+    { "id": "opt_e5f6g7h8", "text": "視覺設計", "tag": "課程興趣-設計" },
+    { "id": "opt_i9j0k1l2", "text": "數位行銷", "tag": null }
+  ]
+  ```
+  - `id`：穩定唯一標識符（`opt_` + 8 碼英數隨機字串）。
+  - `text`：選項顯示文字。
+  - `tag`：對應 CRM 標籤名稱（字串或 null，嚴格限制至多 1 個）。
+
+### 2. 後端轉接器運作機制 (`backend/endpoints/liff_questionnaire.py`)
+- **`_normalize_question_options(answer_type, options)`**：
+  - 當題型為 `single_choice` 時，自動將歷史逗號字串或字串陣列標準化為包含穩定 `id` 與 `tag: null` 的結構化物件清單；若傳入已為結構化物件則驗證並保留穩定 `id` 與單一標籤。
+  - 當題型為其他類型時，相容保留字串清單。
+- **`_extract_option_labels(options)`**：
+  - 專供作答驗證與比對使用。無論 options 為舊版逗號字串、字串陣列或新版結構化物件陣列，皆自動萃取出乾淨的純文字標籤清單。
+- **`_validate_answer(question, value)`**：
+  - 調用 `_extract_option_labels` 進行單選與多選合法性比對，徹底解決選項轉為結構化物件後公眾作答端點比對報錯（`text in allowed`）的重大隱患。
+- **`_serialize_question(row)`**：
+  - 在 API 載入單選題時，若檢測到歷史舊格式，自動即時轉化為結構化物件回傳，確保前端編輯器載入時穩定可靠。
+- **`_question_tags_from_rows(questions)`**：
+  - 自動匯總題目層級標籤與單選選項標籤，呈現於問卷列表卡片中。
+
+### 3. 前端標準化轉接與受控狀態 (`frontend/src/pages/LiffQuestionnaire.jsx`)
+- **`normalizeSingleOptions(rawOptions)`**：於編輯器載入時，將後端傳入之選項轉為前端 state 之 `singleOptions`，補齊 `expanded: false` 折疊狀態。
+- **儲存序列化**：於送出時將單選選項轉為結構化物件陣列，其他題型維持相容字串傳遞。
+- **狀態受控與未儲存防呆**：切換題目僅變更 `activeQuestionIndex`，並於返回清單時偵測 `isDirty` 提供二次確認防護。
+
 ## [2026-10-19] 修復關鍵字回覆啟用狀態無法關閉 (Issue #39)、移除 Heroku 飛安帳號與 Line-Bot-Main 函式化 cronjobs 全線同步升級 (Issue #42)
 - **Heroku Superpages 飛安商案帳號移除**:
   - 自 Heroku Superpages 主資料庫 (`permission_settings`) 安全移除 ID: 9（商案名稱：機場 / mwlarpbot），目前有效商案帳號為 3 個（`yzulabuse`, `yzuirl01`, `ikearrrbot`）。
@@ -754,3 +788,4 @@
   - `frontend/src/pages/RuleDesigner.jsx` 新增 `window.onbeforeunload` 監聽，在編輯中或開啟彈窗時阻止誤觸 F5、重新整理或關閉視窗造成草稿遺失。
 - **網路異常與斷線全域處理**：
   - `frontend/src/api.js` 新增網路斷線與 502/503 伺服器異常事件派發，提升系統在極端網路狀況下的健壯性。
+
