@@ -561,3 +561,35 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - 嚴格限制每個選項配置 **0～1 個既有 CRM 標籤**，未設定時維持 `null`。
 - 題目頂部提供視覺化「CRM 標籤配置進度列 (Progress Indicator)」（例：`3 / 5 個選項已設定標籤`），作為填答導引而非強制限制。
 
+
+
+---
+## [2026-11-10] 已發佈圖文選單無縫熱更新架構（先建後刪＋非同步用戶遷移＋尺寸防呆）
+
+### 1. 核心設計理念與架構解耦
+針對 LINE Messaging API 之圖文選單（Rich Menu）不可變（Immutable）限制，實作「網頁端直接編輯已發佈選單，底層自動執行 Blue-Green 先建後刪＋無縫轉移綁定」之熱更新機制。
+- **內部識別碼解耦 (`ui_uuid`)**：前端互切選單全面採用 `switch_rm|<ui_uuid>`，外部法則、Flex 按鈕與自動旅程皆依據 `ui_uuid` 關聯。編輯已上架選單時**保留原 `rich_menu_metadata` 之主鍵 `id` 與 `ui_uuid`，僅替換底層 `rich_menu_id`**，使所有外部綁定 100% 自動無縫生效，免除重設規則的困擾。
+
+### 2. 後端規格與非同步遷移機制 (`backend/endpoints/richmenu.py`)
+- **複製/繼承舊選單底圖端點 (`POST /<newRichMenuId>/copy-image/<oldRichMenuId>`)**：
+  - 優先自全域快取 `_IMAGE_CACHE` 讀取，若快取未命中則向 LINE Data API (`GET /{oldRichMenuId}/content`) 下載舊二進位底圖並上傳至新選單。
+  - **選單尺寸變更防呆**：比對新舊選單 `size.width` 與 `size.height`，若偵測到尺寸改變且未提供新圖片，直接拒絕沿用舊圖並回傳 `400 Bad Request` (`size_mismatch`)，防止觸發 LINE API 圖片與選單尺寸不合之錯誤。
+- **中繼資料替換與非同步用戶遷移 (`save_rich_menu_metadata` & `async_migrate_rich_menu_users`)**：
+  - 移除已上架選單的草稿唯讀鎖定，僅阻擋將已生效選單退回草稿。
+  - 當偵測到 `old_rich_menu_id` 替換為 `new_rich_menu_id` 時，更新中繼資料後立即向前端回傳成功，避免連線逾時。
+  - 全數個人綁定用戶轉移一律改由後端背景執行緒 (`Background Thread`) 異步執行：
+    1. 自 `Private_var` 撈取所有 `name='rich_menu' AND value=old_rich_menu_id` 之用戶，每 500 人一批呼叫 LINE `bulk/link` 改綁至 `new_rich_menu_id`。
+    2. 同步更新 `Private_var` 中的 `rich_menu` 與 `rich_menu_meta`。
+    3. 同步更新 `OAConfig.other_settings['rich_menu_mappings']`（相容舊版標籤設定）。
+    4. 若該選單為標籤限定 (`status == 'restricted'`)，背景觸發 `bulk_check_and_update_rich_menu` 重新對齊最新標籤用戶。
+    5. 檢查 LINE Alias 清單，將指向舊 ID 之 Alias 更新改綁至新選單 ID。
+    6. **保留安全緩衝時間 (Safe Buffer Interval，3秒)** 確保伺服器處理完畢後，安全呼叫 LINE API 刪除 `old_rich_menu_id`（絕不調用 `check_and_clear_dependencies`，確保法則綁定完好）。
+    7. 清除舊底圖記憶體快取。
+
+### 3. 前端交互與防呆優化 (`frontend/src/pages/RichMenu.jsx`)
+- **開放已發佈選單編輯入口**：列表卡片統一為「<Edit2 /> 編輯」按鈕，`handleEditMenu` 解除 `viewOnly` 唯讀鎖定；針對 LINE API 原生載入之選單自動還原 `switch_rm|` 為 `richmenuswitch` 動作並派發持久 `ui_uuid`。
+- **尺寸變更前端強制校驗**：若管理員修改選單版型尺寸（如由全版改半版），強制要求重新上傳底圖，阻止沿用舊圖。
+- **沿用舊圖發佈**：管理員未重新上傳底圖時，自動呼叫後端 `copy-image` 端點完成繼承。
+- **介面狀態與離開防呆**：
+  - 編輯已發佈選單時標題明確提示「編輯已發佈選單」，隱藏儲存草稿按鈕，主按鈕顯示「更新並發佈至 LINE」。
+  - 關閉或返回列表時新增二次確認防呆彈窗，避免使用者誤觸導致編輯內容遺失。

@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## [2026-11-10] 已發佈圖文選單無縫熱更新架構（先建後刪＋非同步用戶遷移＋尺寸防呆）
+
+### 新增與優化 (Added & Enhanced)
+- **圖文選單熱更新後端端點擴充 (`backend/endpoints/richmenu.py`)**:
+  - 新增 `POST /<newRichMenuId>/copy-image/<oldRichMenuId>` 複製底圖端點，優先讀取 `_IMAGE_CACHE` 快取，無快取則自動從 LINE 下載舊圖並上傳至新選單。
+  - 增加選單解析度比對防呆：若新舊選單 `size` 不一致且未提供新圖片，強制回傳 `400 Bad Request` (`size_mismatch`)，避免圖片尺寸不符之錯誤。
+- **全數非同步遷移背景任務 (`async_migrate_rich_menu_users`)**:
+  - 用戶轉移一律改由背景執行緒非同步處理，消除大量用戶連續 `bulk/link` 造成的前端 HTTP 504 請求逾時風險。
+  - 自動遷移 `Private_var` 個人選單綁定用戶（每 500 人一批呼叫 LINE `bulk/link` 並同步 UPDATE 資料庫）。
+  - 自動同步更新 `OAConfig.other_settings['rich_menu_mappings']`。
+  - 若為 `restricted` 標籤選單，背景觸發 `bulk_check_and_update_rich_menu` 重新校驗標籤。
+  - 自動檢測並轉移 LINE Alias。
+  - 保留 3 秒安全緩衝時間後安全刪除 LINE 舊選單（不調用 `check_and_clear_dependencies`，確保法則綁定完整）。
+- **前端已發佈選單無縫編輯與防呆 (`frontend/src/pages/RichMenu.jsx`)**:
+  - 列表卡片按鈕統一切換為「編輯」，`handleEditMenu` 解除 `viewOnly` 鎖定，相容原生選單還原 `switch_rm|`。
+  - `validateCurrentGroup` 增加選單尺寸變更檢驗，尺寸變更強制要求上傳新底圖。
+  - `publishGroupToLine` 支援沿用舊圖時呼叫 `/copy-image` 端點。
+  - 編輯已發佈選單時頂部標題呈現「編輯已發佈選單」，隱藏草稿儲存按鈕，主按鈕動態呈現「更新並發佈至 LINE」。
+  - 增加離開／返回列表二次確認防呆彈窗，避免未儲存變更誤觸遺失。
+
 ## [2026-11-09] LIFF 問卷資料庫 options 結構化格式說明與前後端相容轉接器機制
 
 ### 1. 資料庫結構化存儲與零中斷相容 (Schema & Storage Compatibility)
@@ -788,4 +808,3 @@
   - `frontend/src/pages/RuleDesigner.jsx` 新增 `window.onbeforeunload` 監聽，在編輯中或開啟彈窗時阻止誤觸 F5、重新整理或關閉視窗造成草稿遺失。
 - **網路異常與斷線全域處理**：
   - `frontend/src/api.js` 新增網路斷線與 502/503 伺服器異常事件派發，提升系統在極端網路狀況下的健壯性。
-

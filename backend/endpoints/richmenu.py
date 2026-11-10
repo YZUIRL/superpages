@@ -344,6 +344,71 @@ def upload_rich_menu_image(richMenuId):
         print(f"Error in upload_rich_menu_image: {e}")
         return jsonify({'message': 'Error', 'error': str(e)}), 500
 
+@richmenu_bp.route('/<newRichMenuId>/copy-image/<oldRichMenuId>', methods=['POST'])
+@token_required
+@syslog_action('RICHMENU_COPY_IMAGE')
+def copy_rich_menu_image(newRichMenuId, oldRichMenuId):
+    token = get_line_token()
+    if not token:
+        return jsonify({'message': 'Line token not configured'}), 400
+
+    headers = {
+        'Authorization': f'Bearer {token}'
+    }
+
+    try:
+        # 1. 尺寸變更防呆檢查：比對新舊選單的 size
+        new_menu_resp = requests.get(f'https://api.line.me/v2/bot/richmenu/{newRichMenuId}', headers=headers, timeout=10)
+        old_menu_resp = requests.get(f'https://api.line.me/v2/bot/richmenu/{oldRichMenuId}', headers=headers, timeout=10)
+
+        if new_menu_resp.status_code == 200 and old_menu_resp.status_code == 200:
+            new_size = new_menu_resp.json().get('size', {})
+            old_size = old_menu_resp.json().get('size', {})
+            if (new_size.get('width') != old_size.get('width')) or (new_size.get('height') != old_size.get('height')):
+                return jsonify({
+                    'message': '選單尺寸已變更，禁止直接沿用舊底圖，請重新上傳符合尺寸之底圖。',
+                    'error': 'size_mismatch'
+                }), 400
+
+        # 2. 獲取舊底圖二進位資料
+        image_bytes = None
+        content_type = 'image/png'
+
+        if oldRichMenuId in _IMAGE_CACHE:
+            image_bytes, content_type = _IMAGE_CACHE[oldRichMenuId]
+        else:
+            download_resp = requests.get(
+                f'https://api-data.line.me/v2/bot/richmenu/{oldRichMenuId}/content',
+                headers=headers,
+                timeout=15
+            )
+            if download_resp.status_code != 200:
+                return jsonify({'message': '無法獲取舊選單底圖', 'error': download_resp.text}), download_resp.status_code
+            image_bytes = download_resp.content
+            content_type = download_resp.headers.get('Content-Type', 'image/png')
+            _IMAGE_CACHE[oldRichMenuId] = (image_bytes, content_type)
+
+        # 3. 上傳至新選單
+        upload_headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': content_type
+        }
+        upload_resp = requests.post(
+            f'https://api-data.line.me/v2/bot/richmenu/{newRichMenuId}/content',
+            headers=upload_headers,
+            data=image_bytes,
+            timeout=20
+        )
+
+        if upload_resp.status_code == 200:
+            _IMAGE_CACHE[newRichMenuId] = (image_bytes, content_type)
+            return jsonify({'status': 'success'})
+
+        return jsonify({'message': '複製底圖失敗', 'line_error': upload_resp.json() if upload_resp.text.startswith('{') else upload_resp.text}), upload_resp.status_code
+    except Exception as e:
+        print(f"Error in copy_rich_menu_image: {e}")
+        return jsonify({'message': 'Error', 'error': str(e)}), 500
+
 @richmenu_bp.route('/<richMenuId>', methods=['DELETE'])
 @token_required
 @syslog_action('RICHMENU_DELETE')
@@ -850,6 +915,142 @@ def get_rich_menu_metadata():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def async_migrate_rich_menu_users(app_name, old_rich_menu_id, new_rich_menu_id, oa_id, status, flask_app=None):
+    """
+    非同步遷移正在顯示舊選單的個人綁定用戶，更新相關配置，並在安全緩衝期後刪除舊選單
+    """
+    import time
+    from endpoints.richmenu import get_line_token, bulk_check_and_update_rich_menu, get_tenant_conn
+    from models import OAConfig, db
+
+    print(f"[AsyncMigrate] 開始熱更新用戶遷移：app_name={app_name}, old={old_rich_menu_id} -> new={new_rich_menu_id}, status={status}")
+    token = get_line_token(app_name=app_name)
+    if not token:
+        print(f"[AsyncMigrate] 錯誤：找不到 app_name={app_name} 的 LINE Token")
+        return
+
+    # 1. 遷移 Private_var 中所有綁定舊選單的個別用戶
+    try:
+        conn = get_tenant_conn()
+        if conn:
+            cur = conn.cursor()
+            t_private = f'"Private_var:{app_name}"'
+            cur.execute(f"SELECT DISTINCT user_id FROM {t_private} WHERE name = 'rich_menu' AND value = %s", (old_rich_menu_id,))
+            rows = cur.fetchall()
+            affected_uids = [
+                r[0] for r in rows
+                if r[0] and isinstance(r[0], str) and r[0].startswith('U') and len(r[0]) == 33
+            ]
+            print(f"[AsyncMigrate] 偵測到 {len(affected_uids)} 位個別綁定用戶需轉移至新選單")
+            if affected_uids:
+                headers = {
+                    'Authorization': f'Bearer {token}',
+                    'Content-Type': 'application/json'
+                }
+                for i in range(0, len(affected_uids), 500):
+                    batch = affected_uids[i:i+500]
+                    try:
+                        resp = requests.post(
+                            'https://api.line.me/v2/bot/richmenu/bulk/link',
+                            headers=headers,
+                            json={'userIds': batch, 'richMenuId': new_rich_menu_id},
+                            timeout=20
+                        )
+                        print(f"[AsyncMigrate] LINE bulk/link 批次 {i//500 + 1}/{(len(affected_uids)-1)//500 + 1}: status={resp.status_code}")
+                    except Exception as be:
+                        print(f"[AsyncMigrate] LINE bulk/link 批次異常: {be}")
+
+                cur.execute(
+                    f"UPDATE {t_private} SET value = %s WHERE name = 'rich_menu' AND value = %s",
+                    (new_rich_menu_id, old_rich_menu_id)
+                )
+                cur.execute(
+                    f"UPDATE {t_private} SET value = REPLACE(value, %s, %s) WHERE name = 'rich_menu_meta' AND value LIKE %s",
+                    (old_rich_menu_id, new_rich_menu_id, f"%{old_rich_menu_id}%")
+                )
+                conn.commit()
+            cur.close()
+            conn.close()
+    except Exception as pe:
+        print(f"[AsyncMigrate] Private_var 遷移錯誤: {pe}")
+
+    # 2. 更新 OAConfig.other_settings['rich_menu_mappings']
+    if oa_id:
+        try:
+            ctx = flask_app.app_context() if flask_app else None
+            if ctx: ctx.push()
+            try:
+                oa = OAConfig.query.get(oa_id)
+                if oa and oa.other_settings and isinstance(oa.other_settings, dict):
+                    mappings = oa.other_settings.get('rich_menu_mappings', [])
+                    changed = False
+                    for mp in mappings:
+                        if mp.get('rich_menu_id') == old_rich_menu_id:
+                            mp['rich_menu_id'] = new_rich_menu_id
+                            changed = True
+                    if changed:
+                        settings = dict(oa.other_settings)
+                        settings['rich_menu_mappings'] = mappings
+                        oa.other_settings = settings
+                        db.session.commit()
+                        print(f"[AsyncMigrate] OAConfig rich_menu_mappings 已同步更新")
+            finally:
+                if ctx: ctx.pop()
+        except Exception as oae:
+            print(f"[AsyncMigrate] OAConfig 映射更新異常: {oae}")
+
+    # 3. 若為標籤限定選單 (restricted)，觸發重新對齊校驗
+    if status == 'restricted':
+        try:
+            from flask import Flask, g
+            dummy_app = Flask(__name__)
+            with dummy_app.app_context():
+                g.current_app_name = app_name
+                g.current_line_token = token
+                bulk_check_and_update_rich_menu(app_name)
+                print(f"[AsyncMigrate] bulk_check_and_update_rich_menu 完成標籤對齊")
+        except Exception as rme:
+            print(f"[AsyncMigrate] bulk_check_and_update_rich_menu 異常: {rme}")
+
+    # 4. 轉移 LINE Alias (若有指向舊選單者)
+    try:
+        alias_resp = requests.get(
+            'https://api.line.me/v2/bot/richmenu/alias/list',
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10
+        )
+        if alias_resp.status_code == 200:
+            aliases = alias_resp.json().get('aliases', [])
+            for al in aliases:
+                if al.get('richMenuId') == old_rich_menu_id:
+                    alias_id = al.get('richMenuAliasId')
+                    if alias_id:
+                        up_resp = requests.post(
+                            f'https://api.line.me/v2/bot/richmenu/alias/{alias_id}',
+                            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+                            json={'richMenuId': new_rich_menu_id},
+                            timeout=10
+                        )
+                        print(f"[AsyncMigrate] LINE Alias {alias_id} 已改綁至 {new_rich_menu_id}: status={up_resp.status_code}")
+    except Exception as ale:
+        print(f"[AsyncMigrate] LINE Alias 檢查異常: {ale}")
+
+    # 5. 安全緩衝時間與舊選單刪除 (注意：絕不呼叫 check_and_clear_dependencies)
+    try:
+        time.sleep(3)  # 安全緩衝時間，確保 LINE 伺服器端完成轉移
+        del_resp = requests.delete(
+            f'https://api.line.me/v2/bot/richmenu/{old_rich_menu_id}',
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10
+        )
+        print(f"[AsyncMigrate] 舊選單 {old_rich_menu_id} 已於 LINE 刪除: status={del_resp.status_code}")
+    except Exception as de:
+        print(f"[AsyncMigrate] 刪除舊選單異常: {de}")
+
+    # 6. 清除舊底圖快取
+    if old_rich_menu_id in _IMAGE_CACHE:
+        del _IMAGE_CACHE[old_rich_menu_id]
+
 @richmenu_bp.route('/metadata', methods=['POST'], strict_slashes=False)
 @token_required
 @syslog_action('RICHMENU_CREATE_DRAFT')
@@ -876,12 +1077,14 @@ def save_rich_menu_metadata():
         conn = get_tenant_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
+            old_rich_menu_id = None
             if id:
                 cur.execute(f"SELECT * FROM {t_metadata} WHERE id = %s", (id,))
                 m = cur.fetchone()
                 if not m: return jsonify({'error': 'Not found'}), 404
-                if m['status'] == 'published' and status == 'draft':
-                    return jsonify({'error': '已發佈的選單不可編輯'}), 400
+                if m['status'] in ['published', 'default', 'restricted'] and status == 'draft':
+                    return jsonify({'error': '已發佈或生效中的選單不可退回草稿狀態'}), 400
+                old_rich_menu_id = m.get('rich_menu_id')
                 
                 publish_strategy = data.get('data', {}).get('publishStrategy')
                 is_scheduled = (status == 'restricted' or publish_strategy == 'restricted')
@@ -890,8 +1093,8 @@ def save_rich_menu_metadata():
                     cur.execute(f"""
                         SELECT id FROM {t_metadata} 
                         WHERE oa_id = %s AND status = 'default' AND id != %s 
-                          AND start_time IS NOT NULL AND end_time IS NOT NULL
-                          AND start_time < %s AND end_time > %s
+                           AND start_time IS NOT NULL AND end_time IS NOT NULL
+                           AND start_time < %s AND end_time > %s
                     """, (oa_id, id, end_time, start_time))
                     if cur.fetchone():
                         return jsonify({'error': '排程時間與現存的排程預設選單重疊，請重新選擇時間。'}), 400
@@ -899,9 +1102,9 @@ def save_rich_menu_metadata():
                     cur.execute(f"""
                         SELECT id FROM {t_metadata} 
                         WHERE oa_id = %s AND id != %s 
-                          AND (status = 'restricted' OR (status = 'draft' AND data->>'publishStrategy' = 'restricted'))
-                          AND start_time IS NOT NULL AND end_time IS NOT NULL
-                          AND start_time < %s AND end_time > %s
+                           AND (status = 'restricted' OR (status = 'draft' AND data->>'publishStrategy' = 'restricted'))
+                           AND start_time IS NOT NULL AND end_time IS NOT NULL
+                           AND start_time < %s AND end_time > %s
                     """, (oa_id, id, end_time, start_time))
                     if cur.fetchone():
                         return jsonify({'error': '排程時間與現存的有排程圖文選單重疊，請重新選擇時間。'}), 400
@@ -948,17 +1151,28 @@ def save_rich_menu_metadata():
 
             conn.commit()
 
-            if status in ['default', 'restricted']:
+            is_replacing = bool(rich_menu_id and old_rich_menu_id and rich_menu_id != old_rich_menu_id)
+
+            app_name_val = getattr(g, 'current_app_name', None)
+            if not app_name_val:
+                oa_id_val = getattr(g, 'current_oa_id', None) or oa_id
+                if oa_id_val:
+                    from models import OAConfig
+                    oa_cfg = OAConfig.query.get(oa_id_val)
+                    if oa_cfg and oa_cfg.other_settings and oa_cfg.other_settings.get('app_name'):
+                        app_name_val = str(oa_cfg.other_settings['app_name'])
+            oa_id_val = getattr(g, 'current_oa_id', None) or oa_id
+
+            if is_replacing and app_name_val:
+                from flask import current_app
+                flask_app = current_app._get_current_object()
                 import threading
-                app_name_val = getattr(g, 'current_app_name', None)
-                if not app_name_val:
-                    oa_id_val = getattr(g, 'current_oa_id', None) or oa_id
-                    if oa_id_val:
-                        from models import OAConfig
-                        oa_cfg = OAConfig.query.get(oa_id_val)
-                        if oa_cfg and oa_cfg.other_settings and oa_cfg.other_settings.get('app_name'):
-                            app_name_val = str(oa_cfg.other_settings['app_name'])
-                            
+                threading.Thread(
+                    target=async_migrate_rich_menu_users,
+                    args=(app_name_val, old_rich_menu_id, rich_menu_id, oa_id_val, status, flask_app)
+                ).start()
+            elif status in ['default', 'restricted'] and app_name_val:
+                import threading
                 def trigger_update(app_name_val, stat):
                     import time
                     time.sleep(1.5)  # Wait for LINE server to process the newly uploaded image
@@ -978,8 +1192,7 @@ def save_rich_menu_metadata():
                     except Exception as e:
                         print(f"Error in background rich menu update: {e}")
                 
-                if app_name_val:
-                    threading.Thread(target=trigger_update, args=(app_name_val, status)).start()
+                threading.Thread(target=trigger_update, args=(app_name_val, status)).start()
 
             return jsonify({'status': 'success', 'id': return_id})
         finally:
