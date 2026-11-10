@@ -418,41 +418,29 @@ function RichMenu() {
                         fallbackMessage: m.fallback_message || '',
                         alias_id: m.alias_id || '',
                         ui_uuid: m.ui_uuid || data.ui_uuid,
-                        group_id: m.group_id || data.group_id,
-                        originalSize: data.size ? { width: data.size.width, height: data.size.height } : null
+                        group_id: m.group_id || data.group_id
                     };
                 });
 
                 setCurrentGroup(loadedGroup);
                 setCurrentMenuIndex(0);
-                setViewOnly(false);
+                setViewOnly(loadedGroup[0].status !== 'draft');
                 setBackgroundImage(loadedGroup[0].imageBase64 || null);
             } else {
-                const newUuid = Date.now().toString(36) + Math.random().toString(36).substring(2);
-                const restoredAreas = (item.areas || []).map(a => {
-                    const action = { ...a.action };
-                    if (action.type === 'postback' && (action.data || '').startsWith('switch_rm|')) {
-                        action.type = 'richmenuswitch';
-                    }
-                    return { ...a, action };
-                });
                 setCurrentGroup([{
                     ...emptyMenu,
                     richMenuId: item.richMenuId,
                     name: item.name,
                     chatBarText: item.chatBarText,
                     size: item.size,
-                    areas: restoredAreas,
+                    areas: item.areas,
                     status: 'published',
                     permissionTags: item.permission_tags || [],
                     fallbackMessage: item.fallback_message || '',
-                    alias_id: item.alias_id || '',
-                    ui_uuid: newUuid,
-                    group_id: newUuid,
-                    originalSize: item.size ? { width: item.size.width, height: item.size.height } : null
+                    alias_id: item.alias_id || ''
                 }]);
                 setCurrentMenuIndex(0);
-                setViewOnly(false);
+                setViewOnly(true);
             }
             setView('edit');
             setSelectedAreaIndex(null);
@@ -533,17 +521,7 @@ function RichMenu() {
                 return false;
             }
 
-            // 尺寸變更防呆：若選單尺寸有變更，強制要求上傳新底圖，禁止沿用舊圖
-            if (isPublishing && menu.originalSize && menu.size) {
-                const widthChanged = Math.round(menu.size.width) !== Math.round(menu.originalSize.width);
-                const heightChanged = Math.round(menu.size.height) !== Math.round(menu.originalSize.height);
-                if ((widthChanged || heightChanged) && !menu.imageFile) {
-                    showToast(`選單「${menu.name}」：您已變更選單尺寸，無法沿用舊底圖，請重新上傳符合新尺寸的底圖。`, 'error');
-                    return false;
-                }
-            }
-
-            if (isPublishing && !menu.imageBase64 && !menu.richMenuId && !menu.imageFile) {
+            if (isPublishing && !menu.imageBase64 && !menu.richMenuId) {
                 showToast(`草稿 ${i + 1}: 錯誤：同步至 LINE 必須上傳底圖`, 'error'); return false;
             }
         }
@@ -599,21 +577,14 @@ function RichMenu() {
         if (viewOnly) return;
         if (!validateCurrentGroup(true)) return;
         
-        const isEditingPublished = currentGroup.some(m => m.status !== 'draft' && (m.richMenuId || m.id));
-        const confirmTitle = isEditingPublished ? '更新已發佈選單' : '確定發佈';
-        const confirmText = isEditingPublished
-            ? '確定要更新並重新發佈至 LINE 嗎？系統將自動替換選單內容並保留所有既有綁定與套用對象。'
-            : '確定要發佈至 LINE 嗎？發佈後內容將鎖定無法再次編輯。';
-        const confirmButtonText = isEditingPublished ? '更新並發佈至 LINE' : '確定發佈';
-
         const confirmResult = await Swal.fire({
-            title: confirmTitle,
-            text: confirmText,
+            title: '確定發佈',
+            text: '確定要發佈至 LINE 嗎？發佈後內容將鎖定無法再次編輯。',
             icon: 'warning',
             showCancelButton: true,
             confirmButtonColor: '#F3B32A',
             cancelButtonColor: '#555',
-            confirmButtonText: confirmButtonText,
+            confirmButtonText: '確定發佈',
             cancelButtonText: '取消',
             background: '#1E1E1E',
             color: '#fff'
@@ -632,7 +603,6 @@ function RichMenu() {
 
             for (let i = 0; i < currentGroup.length; i++) {
                 const menu = currentGroup[i];
-                const oldRichMenuId = menu.richMenuId || menu.rich_menu_id;
                 const metaDataForLine = {
                     size: { width: Math.round(menu.size.width), height: Math.round(menu.size.height) },
                     selected: false,
@@ -677,9 +647,6 @@ function RichMenu() {
                     await api.post(`/richmenu/${richMenuId}/image`, formData, {
                         headers: { 'Content-Type': 'multipart/form-data' }
                     });
-                } else if (oldRichMenuId) {
-                    // 管理員未重新上傳底圖，呼叫後端複製舊選單底圖
-                    await api.post(`/richmenu/${richMenuId}/copy-image/${oldRichMenuId}`);
                 }
 
                 // If this is the one chosen to be default, status becomes public, else published
@@ -1076,27 +1043,6 @@ function RichMenu() {
     }, [combinedList, selectedOAId, menuSearch, myOAs]);
 
     if (view === 'edit') {
-        const isEditingPublished = currentGroup.some(m => m.status !== 'draft' && (m.richMenuId || m.id));
-
-        const handleBackToList = async () => {
-            if (!viewOnly && isEditingPublished) {
-                const result = await Swal.fire({
-                    title: '尚未儲存變更',
-                    text: '您尚未發佈變更，離開將會遺失當前所有編輯進度，確定要離開嗎？',
-                    icon: 'warning',
-                    showCancelButton: true,
-                    confirmButtonColor: '#ff4d4d',
-                    cancelButtonColor: '#555',
-                    confirmButtonText: '確認離開',
-                    cancelButtonText: '取消',
-                    background: '#1E1E1E',
-                    color: '#fff'
-                });
-                if (!result.isConfirmed) return;
-            }
-            setView('list');
-        };
-
         return (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                 {loading && (
@@ -1104,23 +1050,17 @@ function RichMenu() {
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
                     <div>
-                        <button onClick={handleBackToList} style={{ background: 'none', color: '#888', marginBottom: '10px', padding: 0 }}>← 返回列表</button>
+                        <button onClick={() => setView('list')} style={{ background: 'none', color: '#888', marginBottom: '10px', padding: 0 }}>← 返回列表</button>
                         <h1 style={{ fontSize: '28px' }}>
-                            {viewOnly ? '查看選單' : isEditingPublished ? '編輯已發佈選單' : currentMenu.id ? '編輯草稿' : '新增選單'}
+                            {viewOnly ? '查看選單' : currentMenu.id ? '編輯草稿' : '新增選單'}
                             {currentMenu.status === 'published' && <span style={{ marginLeft: '10px', fontSize: '14px', backgroundColor: '#4CAF50', color: 'white', padding: '2px 8px', borderRadius: '4px' }}>已發佈</span>}
-                            {currentMenu.status === 'default' && <span style={{ marginLeft: '10px', fontSize: '14px', backgroundColor: '#2196F3', color: 'white', padding: '2px 8px', borderRadius: '4px' }}>全體預設中</span>}
-                            {currentMenu.status === 'restricted' && <span style={{ marginLeft: '10px', fontSize: '14px', backgroundColor: '#FF9800', color: 'white', padding: '2px 8px', borderRadius: '4px' }}>指定標籤</span>}
                         </h1>
                     </div>
                     <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
                         {!viewOnly && (
                             <>
-                                {!isEditingPublished && (
-                                    <button onClick={saveAsDraft} className="secondary" disabled={loading} style={{ whiteSpace: 'nowrap' }}><Save size={18} /> 儲存草稿群組</button>
-                                )}
-                                <button onClick={handleOpenPublishModal} className="primary" disabled={loading} style={{ whiteSpace: 'nowrap' }}>
-                                    <Send size={18} /> {isEditingPublished ? '更新並發佈至 LINE' : '發佈至 LINE'}
-                                </button>
+                                <button onClick={saveAsDraft} className="secondary" disabled={loading} style={{ whiteSpace: 'nowrap' }}><Save size={18} /> 儲存草稿群組</button>
+                                <button onClick={handleOpenPublishModal} className="primary" disabled={loading} style={{ whiteSpace: 'nowrap' }}><Send size={18} /> 發佈至 LINE</button>
                             </>
                         )}
                         {!viewOnly && currentMenu.richMenuId && (
@@ -1837,7 +1777,7 @@ function RichMenu() {
                                             </p>
                                             <div style={{ display: 'flex', gap: '10px' }}>
                                                 <button onClick={() => handleEditMenu(item, item.isMetadata)} className="secondary" style={{ flex: 1, padding: '8px' }}>
-                                                    <Edit2 size={14} /> 編輯
+                                                    {isDraft ? <Edit2 size={14} /> : <Eye size={14} />} {isDraft ? '編輯' : '查看'}
                                                 </button>
                                                 {isPublished && rid && (
                                                     <>
