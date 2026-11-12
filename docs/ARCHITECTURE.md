@@ -555,3 +555,18 @@ WHERE h.group_id = %s
 ORDER BY h.timestamp ASC;
 ```
 此架構保證了每一次群組對話載入均具備 $O(1)$ 的查詢時間複雜度，並在前端對話氣泡上方即時呈現發話者的真實暱稱與頭像。
+
+### 4. 訊息中心標籤管理與 HTML 入口防快取設計 (2026-11-12)
+- **個人與群組標籤權限邊界**：
+  - 群組聊天室屬於多方對話集合，標籤系統設計綁定於個別用戶之 Private_var。因此在群組視窗時，前端 `TagInput` 與「新增」按鈕進行強制 Disabled 鎖定（樣式呈深灰，游標為 `not-allowed`），避免發送無效的 `set_tag` 指令。
+  - 個人聊天室維持標準標籤膠囊封裝流程：使用者在輸入框鍵入文字後，需按鍵盤 Enter 將其轉化為標籤膠囊（Pill），此時右側「新增」按鈕啟用並支援點擊送出。
+  - 聊天室切換時同步清空暫存標籤陣列，杜絕用戶間標籤狀態殘留。
+- **HTML 入口防快取 Meta 標籤架構 (`frontend/index.html`)**：
+  - 針對 React SPA 單頁應用在多層反向代理（如外層 SSL Nginx 轉發至 Docker 內部 Nginx）情境下容易因瀏覽器導航（Navigation）優先讀取硬碟快取（Disk Cache）而造成新版 JS Bundle 延遲加載之問題，在 `index.html` 的 `<head>` 中引入 HTML 標準 Meta 宣告：
+    ```html
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    ```
+  - 確保瀏覽器解析入口 HTML 時強制進行伺服器條件驗證，達成新版本熱部署後的即時生效。
+

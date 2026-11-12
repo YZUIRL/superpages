@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [2026-11-12] - 訊息中心個人標籤輸入按鈕操作確認與 index.html 防快取 Meta 標籤設定
+### Improved & Fixed (優化與修復)
+- **HTML 入口防快取 Meta 標籤配置 (`frontend/index.html`)**：
+  - 於 `<head>` 標籤中加入 `Cache-Control: no-cache, no-store, must-revalidate`、`Pragma: no-cache` 與 `Expires: 0` 標準 HTTP-EQUIV 標籤，在 HTML 文件層級強制瀏覽器與代理伺服器在常規導航（Navigation）訪問時不使用過期快取。
+- **訊息中心個人與群組標籤輸入按鈕操作確認與狀態重置 (`frontend/src/pages/MessageCenter.jsx`)**：
+  - 嚴格維持原有標籤膠囊封裝模式：在標籤輸入框打完字後，按 Enter 鍵確認生成標籤膠囊（Pill），再點擊「新增」按鈕進行送出。
+  - 明確群組模式下標籤管理停用：當切換至群組對話時，標籤輸入框（提示「群組模式不支援標籤」）與「新增」按鈕雙雙停用（Disabled），樣式呈現灰色與 `not-allowed` 游標。
+  - 個人模式下，當未輸入並生成標籤膠囊時，新增按鈕呈現透明度與「請輸入標籤並按 Enter 確認後再點擊新增」提示；當有標籤膠囊時，按鈕完全亮起並支援點擊送出。
+  - 於切換選取用戶/聊天室時，同步執行 `setTagInput([])` 清空暫存膠囊，杜絕狀態殘留。
+
+
 ## [2026-11-12] - 訊息中心「群組」與「個人」聊天室獨立管理功能與 Docker 部署設定校正
 ### Added & Improved (新功能與優化)
 - **Docker 容器部署配置與反向代理 Port 對齊 (`frontend/nginx.conf`, `backend/Dockerfile`, `.env`)**：
