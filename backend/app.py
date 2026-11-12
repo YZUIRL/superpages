@@ -2268,6 +2268,58 @@ def get_user_history(user_id):
             AND (content IS NULL OR (content != '[text]' AND content NOT LIKE 'bmcast|%%' AND content NOT LIKE 'QA|%%' AND content NOT LIKE 'set_tag|%%' AND content NOT LIKE 'del_tag|%%' AND content NOT LIKE 'cron|%%'))
         """
         
+        # 判斷是否為群組訊息歷史
+        is_group = request.args.get('type') == 'group' or request.args.get('is_group') == 'true'
+        if not is_group:
+            cur.execute(f'SELECT 1 FROM "history:{app_id}" WHERE group_id = %s LIMIT 1', (user_id,))
+            if cur.fetchone():
+                is_group = True
+
+        if is_group:
+            # 群組歷史訊息：使用 LEFT JOIN LATERAL 關聯發話成員的姓名與頭像，徹底杜絕 N+1 查詢
+            lateral_join = f"""
+                LEFT JOIN LATERAL (
+                    SELECT 
+                        MAX(CASE WHEN pv.name = 'name' THEN pv.value END) AS sender_name,
+                        MAX(CASE WHEN pv.name = 'pic'  THEN pv.value END) AS sender_pic
+                    FROM "Private_var:{app_id}" pv
+                    WHERE pv.user_id = h.user_id
+                ) sender_info ON TRUE
+            """
+            select_cols = "h.*, COALESCE(sender_info.sender_name, '') as sender_name, COALESCE(sender_info.sender_pic, '') as sender_pic"
+            
+            if after:
+                cur.execute(
+                    f'SELECT {select_cols} FROM "history:{app_id}" h {lateral_join} WHERE h.group_id = %s AND h.timestamp > %s {visible_message_filter} ORDER BY h.timestamp ASC',
+                    (user_id, after)
+                )
+                raw_history = cur.fetchall()
+            elif limit:
+                if before:
+                    cur.execute(
+                        f'SELECT {select_cols} FROM "history:{app_id}" h {lateral_join} WHERE h.group_id = %s AND h.timestamp < %s {visible_message_filter} ORDER BY h.timestamp DESC LIMIT %s',
+                        (user_id, before, limit)
+                    )
+                    raw_history = cur.fetchall()
+                    raw_history.reverse()
+                else:
+                    cur.execute(
+                        f'SELECT {select_cols} FROM "history:{app_id}" h {lateral_join} WHERE h.group_id = %s {visible_message_filter} ORDER BY h.timestamp DESC LIMIT %s',
+                        (user_id, limit)
+                    )
+                    raw_history = cur.fetchall()
+                    raw_history.reverse()
+            else:
+                cur.execute(
+                    f'SELECT {select_cols} FROM "history:{app_id}" h {lateral_join} WHERE h.group_id = %s {visible_message_filter} ORDER BY h.timestamp ASC',
+                    (user_id,)
+                )
+                raw_history = cur.fetchall()
+
+            cur.close()
+            return json_response(raw_history)
+        
+        # 個人歷史訊息查詢
         user_condition = "(user_id = %s OR user_id = 'all' OR user_id LIKE 'bc_%%')"
         
         if after:
@@ -2439,16 +2491,22 @@ def get_users_list():
     conn = None
     try:
         app_id = get_current_app_id()
+        filter_type = request.args.get('type', 'all').strip().lower() # all | personal | group
         q = request.args.get('q', '').strip()
         tag_filters = request.args.getlist('tag')
         # Also support comma-separated list if provided as a single string
         if len(tag_filters) == 1 and ',' in tag_filters[0]:
             tag_filters = [t.strip() for t in tag_filters[0].split(',') if t.strip()]
 
-        print(f"DEBUG: get_users_list | app_id={app_id} | q={q} | tags={tag_filters}")
+        print(f"DEBUG: get_users_list | app_id={app_id} | type={filter_type} | q={q} | tags={tag_filters}")
 
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        visible_message_filter = """
+                         AND (LOWER(category) NOT IN ('sensor', 'postback', 'follow', 'unfollow', 'beacon', 'cron', 'bmcast') OR category IS NULL)
+                         AND (content IS NULL OR (content != '[text]' AND content NOT LIKE 'bmcast|%%' AND content NOT LIKE 'QA|%%' AND content NOT LIKE 'set_tag|%%' AND content NOT LIKE 'del_tag|%%' AND content NOT LIKE 'cron|%%'))
+        """
 
         # Build dynamic WHERE clauses
         where_clauses = []
@@ -2456,97 +2514,155 @@ def get_users_list():
 
         if q:
             # Handle Unicode escapes for Chinese characters in JSON strings
-            # e.g. "環境變數" -> "\u74b0\u5883\u8b8a\u6578"
             q_escaped = json.dumps(q).strip('"').replace('\\', '\\\\')
             
             where_clauses.append(
-                f"(sub.user_id ILIKE %s"
-                f" OR COALESCE((SELECT value FROM \"Private_var:{app_id}\" WHERE user_id = sub.user_id AND name = 'name' LIMIT 1), '') ILIKE %s"
-                f" OR EXISTS ("
-                f"    SELECT 1 FROM \"history:{app_id}\" h "
-                f"    LEFT JOIN \"QA_bank:{app_id}\" qb ON ("
-                f"        (h.content LIKE 'cron|QA|%%' AND qb.tag = split_part(h.content, '|', 3))"
-                f"        OR (h.content LIKE 'QA|%%' AND qb.tag = split_part(h.content, '|', 2))"
-                f"    )"
-                f"    WHERE h.user_id = sub.user_id "
-                f"    AND ("
-                f"        h.content ILIKE %s OR h.content ILIKE %s"
-                f"        OR qb.ans::text ILIKE %s OR qb.ans::text ILIKE %s"
-                f"        OR qb.msg_rpy::text ILIKE %s OR qb.msg_rpy::text ILIKE %s"
-                f"    )"
-                f"))"
+                f"("
+                f"  (NOT sub.is_group AND ("
+                f"     sub.user_id ILIKE %s"
+                f"     OR COALESCE((SELECT value FROM \"Private_var:{app_id}\" WHERE user_id = sub.user_id AND name = 'name' LIMIT 1), '') ILIKE %s"
+                f"     OR EXISTS ("
+                f"        SELECT 1 FROM \"history:{app_id}\" h "
+                f"        LEFT JOIN \"QA_bank:{app_id}\" qb ON ("
+                f"            (h.content LIKE 'cron|QA|%%' AND qb.tag = split_part(h.content, '|', 3))"
+                f"            OR (h.content LIKE 'QA|%%' AND qb.tag = split_part(h.content, '|', 2))"
+                f"        )"
+                f"        WHERE h.user_id = sub.user_id AND h.group_id IS NULL"
+                f"        AND ("
+                f"            h.content ILIKE %s OR h.content ILIKE %s"
+                f"            OR qb.ans::text ILIKE %s OR qb.ans::text ILIKE %s"
+                f"            OR qb.msg_rpy::text ILIKE %s OR qb.msg_rpy::text ILIKE %s"
+                f"        )"
+                f"     )"
+                f"  ))"
+                f"  OR"
+                f"  (sub.is_group AND ("
+                f"     sub.group_id ILIKE %s"
+                f"     OR ('群組(' || RIGHT(sub.group_id, 6) || ')') ILIKE %s"
+                f"     OR EXISTS ("
+                f"        SELECT 1 FROM \"history:{app_id}\" h "
+                f"        WHERE h.group_id = sub.group_id"
+                f"        AND (h.content ILIKE %s OR h.content ILIKE %s)"
+                f"     )"
+                f"  ))"
+                f")"
             )
-            params.extend([f'%{q}%', f'%{q}%', f'%{q}%', f'%{q_escaped}%', f'%{q}%', f'%{q_escaped}%', f'%{q}%', f'%{q_escaped}%'])
+            # 8 params for personal + 4 params for group
+            params.extend([
+                f'%{q}%', f'%{q}%', f'%{q}%', f'%{q_escaped}%', f'%{q}%', f'%{q_escaped}%', f'%{q}%', f'%{q_escaped}%',
+                f'%{q}%', f'%{q}%', f'%{q}%', f'%{q_escaped}%'
+            ])
         
         for t_filter in tag_filters:
             if t_filter.strip():
                 where_clauses.append(
-                    f"EXISTS (SELECT 1 FROM \"Private_var:{app_id}\" WHERE user_id = sub.user_id AND name = 'tag' AND value ILIKE %s)"
+                    f"(NOT sub.is_group AND EXISTS (SELECT 1 FROM \"Private_var:{app_id}\" WHERE user_id = sub.user_id AND name = 'tag' AND value ILIKE %s))"
                 )
                 params.append(f'%{t_filter.strip()}%')
 
         where_sql = ('WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
 
-        visible_message_filter = """
-                         AND (LOWER(category) NOT IN ('sensor', 'postback', 'follow', 'unfollow', 'beacon', 'cron', 'bmcast') OR category IS NULL)
-                         AND (content IS NULL OR (content != '[text]' AND content NOT LIKE 'bmcast|%%' AND content NOT LIKE 'QA|%%' AND content NOT LIKE 'set_tag|%%' AND content NOT LIKE 'del_tag|%%' AND content NOT LIKE 'cron|%%'))
+        # 構建 CTE 聚合查詢
+        personal_cte = f"""
+            SELECT user_id,
+                   NULL::text as group_id,
+                   FALSE as is_group,
+                   MAX(timestamp) as last_time
+            FROM "history:{app_id}"
+            WHERE group_id IS NULL
+              AND user_id NOT IN ('all', 'yzuadmin', 'system')
+              AND user_id NOT LIKE 'bc_%%'
+              {visible_message_filter}
+            GROUP BY user_id
         """
 
+        group_cte = f"""
+            SELECT group_id as user_id,
+                   group_id,
+                   TRUE as is_group,
+                   MAX(timestamp) as last_time
+            FROM "history:{app_id}"
+            WHERE group_id IS NOT NULL
+              {visible_message_filter}
+            GROUP BY group_id
+        """
+
+        if filter_type == 'personal':
+            combined_cte = f"SELECT * FROM ({personal_cte}) p"
+        elif filter_type == 'group':
+            combined_cte = f"SELECT * FROM ({group_cte}) g"
+        else: # 'all' or default
+            combined_cte = f"SELECT * FROM ({personal_cte}) p UNION ALL SELECT * FROM ({group_cte}) g"
+
         query = f"""
-            WITH target_users AS (
-                SELECT sub.user_id, sub.last_time
-                FROM (
-                    SELECT user_id,
-                           MAX(timestamp) as last_time
-                    FROM "history:{app_id}"
-                    WHERE user_id LIKE 'U%%' AND length(user_id) = 33
-                      {visible_message_filter}
-                    GROUP BY user_id
-                ) sub
+            WITH raw_sessions AS (
+                {combined_cte}
+            ),
+            target_users AS (
+                SELECT sub.user_id, sub.group_id, sub.is_group, sub.last_time
+                FROM raw_sessions sub
                 {where_sql}
                 ORDER BY sub.last_time DESC NULLS LAST, sub.user_id ASC
                 LIMIT 200
             )
             SELECT u.user_id,
-                   (
-                       SELECT content 
-                       FROM "history:{app_id}" 
-                       WHERE user_id = u.user_id 
-                         {visible_message_filter}
-                       ORDER BY timestamp DESC 
-                       LIMIT 1
-                   ) as last_message,
-                   (
-                       SELECT category 
-                       FROM "history:{app_id}" 
-                       WHERE user_id = u.user_id 
-                         {visible_message_filter}
-                       ORDER BY timestamp DESC 
-                       LIMIT 1
-                   ) as last_message_category,
-                   (
-                       SELECT json_agg(msg_data)
-                       FROM (
-                           SELECT * 
-                           FROM "history:{app_id}" 
-                           WHERE user_id = u.user_id 
-                             {visible_message_filter}
-                           ORDER BY timestamp DESC 
-                           LIMIT 10
-                       ) msg_data
-                   ) as recent_messages,
+                   u.group_id,
+                   u.is_group,
                    u.last_time,
-                    (SELECT string_agg(value, '|') FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'tag') as tags,
-                    (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'name' LIMIT 1) as name,
-                    (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'pic' LIMIT 1) as pic,
-                    (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'unread_count' LIMIT 1) as unread_count,
-                    (
-                        SELECT category
-                        FROM "history:{app_id}"
-                        WHERE user_id = u.user_id AND category IN ('Follow', 'Unfollow')
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                    ) IS DISTINCT FROM 'Unfollow' as is_following
+                   CASE 
+                       WHEN u.is_group THEN 
+                           (SELECT content FROM "history:{app_id}" WHERE group_id = u.group_id {visible_message_filter} ORDER BY timestamp DESC LIMIT 1)
+                       ELSE
+                           (SELECT content FROM "history:{app_id}" WHERE user_id = u.user_id AND group_id IS NULL {visible_message_filter} ORDER BY timestamp DESC LIMIT 1)
+                   END as last_message,
+                   CASE 
+                       WHEN u.is_group THEN 
+                           (SELECT category FROM "history:{app_id}" WHERE group_id = u.group_id {visible_message_filter} ORDER BY timestamp DESC LIMIT 1)
+                       ELSE
+                           (SELECT category FROM "history:{app_id}" WHERE user_id = u.user_id AND group_id IS NULL {visible_message_filter} ORDER BY timestamp DESC LIMIT 1)
+                   END as last_message_category,
+                   CASE 
+                       WHEN u.is_group THEN 
+                           (SELECT json_agg(msg_data) FROM (
+                               SELECT * FROM "history:{app_id}" WHERE group_id = u.group_id {visible_message_filter} ORDER BY timestamp DESC LIMIT 10
+                           ) msg_data)
+                       ELSE
+                           (SELECT json_agg(msg_data) FROM (
+                               SELECT * FROM "history:{app_id}" WHERE user_id = u.user_id AND group_id IS NULL {visible_message_filter} ORDER BY timestamp DESC LIMIT 10
+                           ) msg_data)
+                   END as recent_messages,
+                   CASE 
+                       WHEN u.is_group THEN ''
+                       ELSE (SELECT string_agg(value, '|') FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'tag')
+                   END as tags,
+                   CASE 
+                       WHEN u.is_group THEN '群組(' || RIGHT(u.group_id, 6) || ')'
+                       ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'name' LIMIT 1)
+                   END as name,
+                   CASE 
+                       WHEN u.is_group THEN 'https://cdn-icons-png.flaticon.com/512/166/166258.png'
+                       ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'pic' LIMIT 1)
+                   END as pic,
+                   CASE 
+                       WHEN u.is_group THEN COALESCE((SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.group_id AND name = 'unread_count' LIMIT 1), '0')
+                       ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'unread_count' LIMIT 1)
+                   END as unread_count,
+                   CASE 
+                       WHEN u.is_group THEN TRUE
+                       ELSE (
+                           (SELECT category FROM "history:{app_id}" WHERE user_id = u.user_id AND category IN ('Follow', 'Unfollow') ORDER BY timestamp DESC LIMIT 1) IS DISTINCT FROM 'Unfollow'
+                       )
+                   END as is_following,
+                   CASE 
+                       WHEN u.is_group THEN COALESCE((
+                           SELECT (LOWER(category) = 'leave' OR LOWER(content) LIKE '%%leave%%')
+                           FROM "history:{app_id}"
+                           WHERE group_id = u.group_id AND LOWER(category) IN ('join', 'leave')
+                           ORDER BY timestamp DESC
+                           LIMIT 1
+                       ), FALSE)
+                       ELSE FALSE
+                   END as is_left
             FROM target_users u
             ORDER BY u.last_time DESC NULLS LAST, u.user_id ASC
         """
@@ -2632,6 +2748,28 @@ def check_and_update_rich_menu(user_id, tag):
 def trigger_socket_event_route():
     data = request.json
     try:
+        # 若發送對象為群組，檢查群組是否處於退群 (Leave) 狀態
+        target_id = data.get('user', '')
+        if target_id:
+            try:
+                app_id = get_current_app_id()
+                chk_conn = get_db_connection()
+                chk_cur = chk_conn.cursor()
+                chk_cur.execute(f"""
+                    SELECT (LOWER(category) = 'leave' OR LOWER(content) LIKE '%%leave%%')
+                    FROM "history:{app_id}"
+                    WHERE group_id = %s AND LOWER(category) IN ('join', 'leave')
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, (target_id,))
+                status_row = chk_cur.fetchone()
+                chk_cur.close()
+                chk_conn.close()
+                if status_row and status_row[0]:
+                    return jsonify({"error": "已退出該群組，無法發送訊息"}), 400
+            except Exception as chk_e:
+                print(f"DEBUG: check group leave status error: {chk_e}")
+
         send_socket_event(data)
         
         # 檢查 Rich Menu 分配與寫入 tag_meta

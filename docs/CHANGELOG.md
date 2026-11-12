@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [2026-11-12] - 訊息中心「群組」與「個人」聊天室獨立管理功能與 Docker 部署設定校正
+### Added & Improved (新功能與優化)
+- **Docker 容器部署配置與反向代理 Port 對齊 (`frontend/nginx.conf`, `backend/Dockerfile`, `.env`)**：
+  - 修復 `frontend/nginx.conf` 中 `/api` 反向代理目標至 `http://backend:9017`（原寫死為 5000 導致 502 Bad Gateway）。
+  - 同步將 `backend/Dockerfile` 之 `EXPOSE` 埠號校正為 `9017`，確保前後端容器內部網路通信完全一致。
+  - 補齊根目錄 `.env` 基礎環境變數設定檔，保障 `docker compose up` 平穩無損構建啟動。
+- **後端 API 支援群組對話與 LEFT JOIN LATERAL 樞紐查詢 (`backend/app.py`)**：
+  - `GET /api/users`：新增 `type=all|personal|group` 篩選參數（預設為 `all` 向下相容）；移除硬編碼 `WHERE user_id LIKE 'U%'` 限制；個人以 `group_id IS NULL` 聚合判定，群組以 `group_id IS NOT NULL` 聚合判定並標記 `is_group: true`；群組名稱預設顯示 `群組(後6碼)`，整合 `is_left` 退出狀態探測。
+  - `GET /api/history/<id>`：自動辨識個人私聊與群組聊天室。若為群組，全面採用 PostgreSQL `LEFT JOIN LATERAL` 於單一 SQL 內完成發話成員 `Private_var` 姓名 (`sender_name`) 與頭像 (`sender_pic`) 之逐列關聯樞紐（Pivot），徹底杜絕 N+1 查詢瓶頸（$O(1)$ 複雜度）。
+  - `POST /api/trigger`：發送目標為群組 ID 時，檢驗群組是否為退群 (Leave) 狀態，若已退群則阻擋發送並回傳 400，防止 LINE API 拋出異常。
+- **前端訊息中心頁籤與群組互動升級 (`frontend/src/pages/MessageCenter.jsx`, `frontend/src/components/TagInput.jsx`)**：
+  - 側邊欄頂部新增「全部 / 個人 / 群組」頁籤切換，點擊即時傳遞 `type` 至後端分流檢索。
+  - 側邊欄項目視覺化區隔：群組項目顯示黃色圓底群組圖示 (`Users`) 與 `群組` 徽章，退群對象顯示 `已退群` 徽章。
+  - 對話視窗 Header：群組聊天室隱藏個人標籤展示，將右上方「標籤管理」（`TagInput` 與按鈕）置為停用（Disabled）狀態，提示「群組模式不支援標籤」。
+  - 對話訊息氣泡：群組聊天室內成員發言氣泡上方清楚標示成員頭像與暱稱 (`m.sender_pic`, `m.sender_name`)。
+  - 退群防呆機制：當檢測到群組處於退群狀態 (`is_left: true`) 時，訊息輸入框與發送按鈕直接停用並以紅色警告條提示「已退出該群組，無法發送訊息」。
+
 ## [2026-10-12] GitHub 圖片上傳 EOF 讀取修復與電腦版 LIFF 問卷提示「請使用LINE開啟此連結」
 - **GitHub 圖片上傳端點串流 EOF 缺陷修復 (`backend/endpoints/upload.py`, `frontend/src/pages/LiffQuestionnaire.jsx`)**:
   - **根本原因排除**：修復在 `POST /api/upload/github` 上傳問卷底圖或圖文訊息時遭遇 HTTP 400 錯誤之問題。原先程式碼在初步驗證 Magic Bytes 讀取檔案流後，於 `try` 區塊重複呼叫 `file_content = file.read()`，因未執行 `seek(0)` 導致讀取指針已在 EOF 而讀入空內容，觸發防偽冒型態判定失敗回傳 400。

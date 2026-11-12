@@ -499,3 +499,59 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - 調整 `backend/endpoints/liff_questionnaire.py` (`public_submit_response`) 發送 WebSocket `Sensor` 事件之結構：維持 `"user": identity["line_user_id"]` 為填答者個人 LINE UID，並以獨立欄位 `"groupid": source_meta.get("group_id") or None` 傳遞來源群組 ID，確保 `Line-Bot-Main` 執行法則表時能正確以個人 `user_id` 讀取 `Private_var` (`pri(...)`) 與狀態機，同時將回覆與後續非同步 API 事件發送至目標群組。
 
 - 擴充 LIFF 問卷答案類型 (`frontend/src/pages/LiffQuestionnaire.jsx`, `backend/endpoints/liff_questionnaire.py`)：將原本單一「文字」拆分為「文字 (`text`)」（單行不可換行）與「多行文字 (`textarea`)」（多行可換行），後端 `_validate_answer` 對 `text` 自動將換行字元正規化為空白，對 `textarea` 保留多行文字。
+
+
+## [2026-11-12] 訊息中心群組與個人聊天室獨立管理架構 (Message Center Session Architecture)
+
+### 1. 核心理念與 Session Key 聚合模型
+商案歷史對話表 `history:{app_name}` 同時承載 1-on-1 個人私聊與群組多方對話。為避免對既有資料庫架構進行侵入性改動，系統在邏輯層將 Session Key 徹底解耦：
+- **個人對話 (Personal Session)**：
+  - **判定條件**：`group_id IS NULL` 且 `user_id NOT IN ('all', 'yzuadmin', 'system')` 且 `user_id NOT LIKE 'bc_%'`。
+  - **Session Key**：`user_id`。
+  - **屬性來源**：從 `Private_var:{app_id}` 關聯用戶 `name`、`pic`、`tag`、`unread_count`，依最後 Follow 事件判定 `is_following`。
+- **群組對話 (Group Session)**：
+  - **判定條件**：`group_id IS NOT NULL`。
+  - **Session Key**：`group_id`。
+  - **識別標記**：`is_group: true`。
+  - **名稱與識別**：預設為 `'群組(' || RIGHT(group_id, 6) || ')'`，頭像設為群組識別圖示。
+  - **退群狀態 (Leave Detection)**：查詢群組最新之 Join/Leave 事件，若最新事件為 Leave 則判定 `is_left: true`。
+
+### 2. SQL CTE 查詢分流架構
+在 `GET /api/users` API 中，利用 CTE（Common Table Expressions）進行條件分流，支援 `type=all|personal|group` 篩選：
+```sql
+WITH personal_cte AS (
+    SELECT user_id, NULL::text as group_id, FALSE as is_group, MAX(timestamp) as last_time
+    FROM "history:{app_id}"
+    WHERE group_id IS NULL AND user_id NOT IN ('all', 'yzuadmin', 'system') AND user_id NOT LIKE 'bc_%'
+    GROUP BY user_id
+),
+group_cte AS (
+    SELECT group_id as user_id, group_id, TRUE as is_group, MAX(timestamp) as last_time
+    FROM "history:{app_id}"
+    WHERE group_id IS NOT NULL
+    GROUP BY group_id
+),
+raw_sessions AS (
+    -- 依據 type 參數執行 personal_cte、group_cte 或 UNION ALL 聯合查詢
+)
+```
+在外層統一以 `last_time DESC NULLS LAST` 排序並限制前 200 筆，保障資料庫在海量歷史數據下的極致檢索效能。
+
+### 3. 發話者資訊逐列樞紐架構 (LEFT JOIN LATERAL)
+在 `GET /api/history/<group_id>` 群組歷史對話中，群組訊息包含多位成員的交互發言。為避免 N+1 查詢與傳統多表 JOIN 產生的笛卡兒積膨脹，採用 PostgreSQL 原生之 `LEFT JOIN LATERAL` 於單一 SQL 查詢中完成 EAV 模型屬性橫向樞紐化（Pivot）：
+```sql
+SELECT h.*,
+       COALESCE(sender_info.sender_name, '') as sender_name,
+       COALESCE(sender_info.sender_pic, '') as sender_pic
+FROM "history:{app_id}" h
+LEFT JOIN LATERAL (
+    SELECT 
+        MAX(CASE WHEN pv.name = 'name' THEN pv.value END) AS sender_name,
+        MAX(CASE WHEN pv.name = 'pic'  THEN pv.value END) AS sender_pic
+    FROM "Private_var:{app_id}" pv
+    WHERE pv.user_id = h.user_id
+) sender_info ON TRUE
+WHERE h.group_id = %s
+ORDER BY h.timestamp ASC;
+```
+此架構保證了每一次群組對話載入均具備 $O(1)$ 的查詢時間複雜度，並在前端對話氣泡上方即時呈現發話者的真實暱稱與頭像。
