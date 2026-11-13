@@ -243,7 +243,6 @@ function MessageCenter() {
             }
 
             setMessageSearch(''); // 切換用戶時清除對話搜尋
-            setTagInput([]); // 切換用戶時清空尚未送出的標籤暫存
         }
     }, [selectedUser]);
 
@@ -1407,7 +1406,7 @@ function MessageCenter() {
                                 <button
                                     onClick={handleAddTag}
                                     disabled={currentUserInfo?.is_group || !tagInput || tagInput.length === 0}
-                                    title={currentUserInfo?.is_group ? "群組模式不支援標籤" : (!tagInput || tagInput.length === 0 ? "請輸入標籤並按 Enter 確認後再點擊新增" : "新增標籤")}
+                                    title={currentUserInfo?.is_group ? "群組模式不支援新增標籤" : "新增標籤"}
                                     style={{
                                         padding: '6px 15px',
                                         height: '36px',
@@ -1417,8 +1416,7 @@ function MessageCenter() {
                                         borderRadius: '4px',
                                         cursor: (currentUserInfo?.is_group || !tagInput || tagInput.length === 0) ? 'not-allowed' : 'pointer',
                                         border: 'none',
-                                        opacity: currentUserInfo?.is_group ? 0.6 : ((!tagInput || tagInput.length === 0) ? 0.6 : 1),
-                                        transition: 'opacity 0.2s, background-color 0.2s'
+                                        opacity: currentUserInfo?.is_group ? 0.6 : 1
                                     }}
                                 >
                                     新增
