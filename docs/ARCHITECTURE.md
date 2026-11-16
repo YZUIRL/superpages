@@ -555,3 +555,12 @@ WHERE h.group_id = %s
 ORDER BY h.timestamp ASC;
 ```
 此架構保證了每一次群組對話載入均具備 $O(1)$ 的查詢時間複雜度，並在前端對話氣泡上方即時呈現發話者的真實暱稱與頭像。
+
+### 4. 前端標籤資料正規化與操作護欄架構 (2026-11-16)
+- **標籤格式異構性與清洗機制 (`normalizeTagString`)**：
+  - 後端 `Private_var` 的 `tag` 欄位以 Python 陣列字串（如 `['aaa']`、`['aaa', 'bbb']`）儲存，且多筆記錄由 PostgreSQL `string_agg` 以 `|` 串接。
+  - 前端在 `fetchUsers` 接收資料時，先經由 `normalizeTagString` 進行階層式拆解：以 `|` 分割 ➔ 剝除首尾外層方括號 `[` 與 `]` ➔ 以逗號 `,` 拆解子元素 ➔ 剝除單引號 `'` 與雙引號 `"` ➔ 排除 `null`、`undefined`、`[]` 等雜質，保證進到記憶體狀態的永遠為乾淨的純文字陣列。
+- **10 秒操作護欄比對對齊**：
+  - 用戶在新增標籤時，記憶體護欄（`pendingTagAdditionsRef`）以純文字（如 `aaa`）為鍵。
+  - 當伺服器回傳之標籤資料在第一時間完成正規化為純文字陣列（`tagParts`）後，`tagParts.includes(t)` 比對結果完全精準，消除了因鍵名格式脫節造成的重複追加（`['aaa']|aaa`）問題。
+

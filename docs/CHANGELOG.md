@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [2026-11-16] - 訊息中心前端標籤正規化解析修復 (消除雙重標籤與括號引號問題)
+### Improved & Fixed (優化與修復)
+- **訊息中心前端標籤解析正規化 (`frontend/src/pages/MessageCenter.jsx`)**：
+  - 封裝共用標籤正規化函式 `normalizeTagString`，支援將 Python 陣列字串（如 `"['aaa']"`、`"['aaa', 'bbb']"`）、逗號或管線分隔符號徹底拆解為純標籤名陣列，並去除最外層方括號、單雙引號及無效空值。
+  - 修復 `fetchUsers` 收到伺服器資料時，因字串未拆解導致「10 秒樂觀新增護欄」重複追加純文字標籤的 Bug，徹底消除畫面上同時出現 `['aaa']` 與 `aaa` 雙重標籤的問題。
+  - 將 `getCurrentUserTags` 與 `fetchAvailableTags` 同步收斂使用 `normalizeTagString`，確保用戶卡片、聊天室頂部標籤列與左側標籤篩選清單皆一致呈現乾淨的純文字標籤。
+
+
 ## [2026-11-12] - 訊息中心「群組」與「個人」聊天室獨立管理功能與 Docker 部署設定校正
 ### Added & Improved (新功能與優化)
 - **Docker 容器部署配置與反向代理 Port 對齊 (`frontend/nginx.conf`, `backend/Dockerfile`, `.env`)**：

@@ -140,6 +140,45 @@ class MessageCenterErrorBoundary extends React.Component {
     }
 }
 
+// 輔助函式：正規化標籤字串，將 Python 陣列字串 (如 "['aaa']")、逗號或管線分隔字串徹底拆解為純標籤名陣列
+const normalizeTagString = (rawTagsInput) => {
+    if (!rawTagsInput) return [];
+    const inputStr = typeof rawTagsInput === 'string' ? rawTagsInput : String(rawTagsInput);
+    let tags = [];
+
+    // 先以 | 切分（後端 string_agg 預設以 | 聚合多筆記錄）
+    const parts = inputStr.split('|');
+    parts.forEach(part => {
+        let trimmed = part.trim();
+        if (!trimmed) return;
+
+        // 若為 ['a', 'b'] 陣列格式
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            const inner = trimmed.substring(1, trimmed.length - 1);
+            inner.split(',').forEach(item => {
+                const cleaned = item.trim().replace(/^['"]+|['"]+$/g, '');
+                if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                    tags.push(cleaned);
+                }
+            });
+        } else if (trimmed.includes(',')) {
+            trimmed.split(',').forEach(item => {
+                const cleaned = item.trim().replace(/^['"]+|['"]+$/g, '');
+                if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                    tags.push(cleaned);
+                }
+            });
+        } else {
+            const cleaned = trimmed.replace(/^['"]+|['"]+$/g, '');
+            if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                tags.push(cleaned);
+            }
+        }
+    });
+
+    return [...new Set(tags)];
+};
+
 function MessageCenter() {
     const location = useLocation();
     const [users, setUsers] = useState([]);
@@ -316,10 +355,10 @@ function MessageCenter() {
                     let result = nu;
                     // --- 標籤操作護欄 (10秒機制) ---
                     const now = Date.now();
-                    const currentTagsStr = typeof result.tags === 'string' ? result.tags : String(result.tags || '');
-                    let tagParts = currentTagsStr.split('|').map(t => t.trim().replace(/^['"]|['"]$/g, '')).filter(t => t);
+                    // 1. 第一時間將伺服器回傳之 tags 徹底拆解為純標籤名陣列（消除最外層 [、] 與引號）
+                    let tagParts = normalizeTagString(result.tags);
 
-                    // 1. 處理刪除護欄：濾掉 10 秒內被刪除的標籤
+                    // 2. 處理刪除護欄：濾掉 10 秒內被刪除的標籤
                     const pendingDels = pendingTagDeletionsRef.current[nu.user_id];
                     if (pendingDels) {
                         tagParts = tagParts.filter(t => {
@@ -330,7 +369,7 @@ function MessageCenter() {
                         });
                     }
 
-                    // 2. 處理新增護欄：補回 10 秒內新增、但伺服器回傳中缺失的標籤
+                    // 3. 處理新增護欄：比對純文字標籤，若未包含才追加
                     const pendingAdds = pendingTagAdditionsRef.current[nu.user_id];
                     if (pendingAdds) {
                         Object.entries(pendingAdds).forEach(([t, addedAt]) => {
@@ -384,39 +423,7 @@ function MessageCenter() {
     const getCurrentUserTags = (userObj) => {
         const user = userObj || users.find(u => u.user_id === selectedUser);
         if (!user || !user.tags) return [];
-
-        let tagsInput = user.tags;
-        let tagList = [];
-
-        // 處理分割符 |
-        const rawParts = typeof tagsInput === 'string' ? tagsInput.split('|') : [tagsInput];
-
-        rawParts.forEach(part => {
-            if (!part) return;
-            let trimmed = String(part).trim();
-
-            // 處理 ['A', 'B'] 這種字串
-            if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-                // 移除前後方括號，然後依照逗號分割
-                const inner = trimmed.substring(1, trimmed.length - 1);
-                // 處理逗號分割並移除引號
-                inner.split(',').forEach(s => {
-                    const s_clean = s.trim().replace(/^['"]|['"]$/g, '');
-                    if (s_clean) tagList.push(s_clean);
-                });
-            } else if (trimmed.includes(',')) {
-                trimmed.split(',').forEach(s => {
-                    const s_clean = s.trim().replace(/^['"]|['"]$/g, '');
-                    if (s_clean) tagList.push(s_clean);
-                });
-            } else {
-                tagList.push(trimmed.replace(/^['"]|['"]$/g, ''));
-            }
-        });
-
-        // 最終清理與去重
-        const uniqueTags = [...new Set(tagList.map(t => String(t).trim()).filter(t => t && t !== 'null' && t !== 'undefined' && t !== '[]' && t !== '{}'))];
-        return uniqueTags;
+        return normalizeTagString(user.tags);
     };
 
     // --- 輔助：格式化側邊欄的最後一則訊息 ---
@@ -822,9 +829,14 @@ function MessageCenter() {
     const fetchAvailableTags = async () => {
         try {
             const resp = await api.get('/tags');
-            // 後端已經處理過一部分，但保險起見前端再做一次清理
-            const tags = resp.data || [];
-            setAvailableTags(tags);
+            // 後端已經處理過一部分，前端使用 normalizeTagString 確保徹底剝離所有括號與引號
+            const rawTags = resp.data || [];
+            const cleanedTags = [];
+            rawTags.forEach(t => {
+                const parsed = normalizeTagString(t);
+                cleanedTags.push(...parsed);
+            });
+            setAvailableTags([...new Set(cleanedTags)]);
         } catch (err) {
             console.error('Error fetching tags:', err);
         }
