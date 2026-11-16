@@ -880,7 +880,8 @@ function MessageCenter() {
         if (!tagInput || tagInput.length === 0 || !selectedUser) return;
         
         const userId = selectedUser;
-        const tagNames = tagInput;
+        const tagNames = tagInput.map(t => String(t).trim()).filter(t => t);
+        if (tagNames.length === 0) return;
 
         // 將標籤加入「正在新增中」的追蹤清單，紀錄時間戳記，護欄時間為 10 秒
         if (!pendingTagAdditionsRef.current[userId]) {
@@ -890,16 +891,20 @@ function MessageCenter() {
             pendingTagAdditionsRef.current[userId][tagName] = Date.now();
         });
 
-        const tagsStr = `[${tagNames.map(t => `'${t}'`).join(', ')}]`;
         setTagInput([]);
 
         try {
-            await api.post('/trigger', {
-                user: userId,
-                message: `set_tag|${tagsStr}`,
-                type: 'Sensor',
-                api_index: 0
-            });
+            // 對齊外部機器人格式：以純文字格式發送 set_tag|{tag}
+            await Promise.all(
+                tagNames.map(tagName =>
+                    api.post('/trigger', {
+                        user: userId,
+                        message: `set_tag|${tagName}`,
+                        type: 'Sensor',
+                        api_index: 0
+                    })
+                )
+            );
             showToast(`已新增標籤: ${tagNames.join(', ')}`, 'success');
             fetchAvailableTags(); // 立即重新整理標籤篩選清單
             

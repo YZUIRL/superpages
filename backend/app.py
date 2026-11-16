@@ -2775,18 +2775,29 @@ def trigger_socket_event_route():
         # 檢查 Rich Menu 分配與寫入 tag_meta
         msg = data.get('message', '')
         if msg.startswith('set_tag|'):
-            raw_tag = msg.split('|', 1)[1]
+            raw_tag = msg.split('|', 1)[1].strip()
             user_id = data.get('user')
             if user_id:
+                tag_list = []
                 try:
                     import ast, json
                     from datetime import datetime
-                    tag_list = []
-                    try:
-                        parsed = ast.literal_eval(raw_tag)
-                        tag_list = parsed if isinstance(parsed, list) else [str(parsed)]
-                    except Exception:
-                        tag_list = [raw_tag.strip("['\"]")]
+                    if raw_tag.startswith('[') and raw_tag.endswith(']'):
+                        try:
+                            parsed = ast.literal_eval(raw_tag)
+                            tag_list = parsed if isinstance(parsed, list) else [str(parsed)]
+                        except Exception:
+                            tag_list = [raw_tag.strip("[]'\" ")]
+                    else:
+                        tag_list = [t.strip("[]'\" ") for t in raw_tag.split(',') if t.strip("[]'\" ")]
+
+                    # 徹底正規化清洗 tag_list，確保每個元素皆為乾淨純字串
+                    cleaned_tag_list = []
+                    for t in tag_list:
+                        clean_t = str(t).strip("[]'\" ")
+                        if clean_t and clean_t not in cleaned_tag_list:
+                            cleaned_tag_list.append(clean_t)
+                    tag_list = cleaned_tag_list
 
                     app_id = get_current_app_id()
                     if app_id:
@@ -2805,9 +2816,16 @@ def trigger_socket_event_route():
                         if row and row[0]:
                             try:
                                 ex_p = ast.literal_eval(row[0])
-                                existing_tags = ex_p if isinstance(ex_p, list) else [str(ex_p)]
-                            except:
-                                existing_tags = [row[0]]
+                                raw_existing = ex_p if isinstance(ex_p, list) else [str(ex_p)]
+                            except Exception:
+                                raw_existing = [row[0]]
+                            
+                            # 關鍵防禦：清洗既有標籤中的歷史髒資料（去除多餘外層中括號與引號）
+                            for ex in raw_existing:
+                                clean_ex = str(ex).strip("[]'\" ")
+                                if clean_ex and clean_ex not in existing_tags:
+                                    existing_tags.append(clean_ex)
+
                         new_tags = list(dict.fromkeys(existing_tags + tag_list))
                         cur.execute(f"UPDATE {pv_table} SET value = %s WHERE user_id = %s AND name = 'tag'", (str(new_tags), user_id))
                         if cur.rowcount == 0:
@@ -2828,7 +2846,8 @@ def trigger_socket_event_route():
                 except Exception as pve:
                     print("Error updating Private_var tag_meta in /trigger:", pve)
 
-                check_and_update_rich_menu(user_id, raw_tag)
+                for t in tag_list:
+                    check_and_update_rich_menu(user_id, t)
                 
         return jsonify({"status": "success"})
     except Exception as e:

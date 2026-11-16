@@ -564,3 +564,12 @@ ORDER BY h.timestamp ASC;
   - 用戶在新增標籤時，記憶體護欄（`pendingTagAdditionsRef`）以純文字（如 `aaa`）為鍵。
   - 當伺服器回傳之標籤資料在第一時間完成正規化為純文字陣列（`tagParts`）後，`tagParts.includes(t)` 比對結果完全精準，消除了因鍵名格式脫節造成的重複追加（`['aaa']|aaa`）問題。
 
+### 5. 標籤純文字傳輸與雙系統資料庫去重架構 (2026-11-16)
+- **外部機器人純文字通訊協定對齊**：
+  - 外部 Line Bot 服務對於 Socket 事件之 `set_tag|` 與 `del_tag|` 採純文字解析模式。若傳送陣列封裝字串（如 `set_tag|['aaa']`），外部機器人會將整個括號引號字串視為標籤本體存入資料庫。
+  - 前端 `MessageCenter.jsx` 全面改為純文字指令發送：`set_tag|${tagName}` 與 `del_tag|${tagName}`。多標籤情境採用 `Promise.all` 逐筆發送純文字訊息，達成雙方協定百分之百對齊。
+- **後端入庫元素級去殼與去重防禦機制**：
+  - 後端 `/api/trigger` 在處理 `set_tag|` 時，除了支援純文字與舊格式解析，針對待新增的 `tag_list` 與從資料庫取出之既有標籤 `existing_tags`，一律執行元素級 `strip("[]'\" ")` 去殼清洗。
+  - 此機制消除了 Python 字串比對時 `"['aaa']" != 'aaa'` 造成的 `dict.fromkeys` 去重失效問題，確保資料庫儲存的標籤列表永遠只有乾淨的純文字標籤（如 `['aaa', 'bbb']`），且能在用戶下一次新增標籤時自動淨化該用戶之歷史髒資料。
+
+

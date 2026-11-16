@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## [2026-11-16] - 標籤傳輸與儲存純文字格式對齊 (對齊外部機器人與消除重複髒資料)
+### Improved & Fixed (優化與修復)
+- **前端標籤傳輸格式對齊外部機器人 (`frontend/src/pages/MessageCenter.jsx`)**：
+  - 調整 `handleAddTag`：取消將標籤包裝為 Python List 陣列字串（`['aaa']`）之傳輸邏輯，改為針對每個標籤以純文字格式獨立發送 `set_tag|${tagName}`，使用 `Promise.all` 併發發送，格式完全對齊外部機器人服務（Line Bot Socket）。
+  - 保留 `handleDeleteTag` 原有行為，持續發送純文字指令 `del_tag|${tagName}`。
+- **後端入庫去殼清洗與歷史髒資料淨化 (`backend/app.py`)**：
+  - 在 `/api/trigger` 處理 `set_tag|` 時，全面支援純文字格式標籤解析，並對 `tag_list` 進行去引號與括號之元素級清洗。
+  - 在讀取 `Private_var` 既有標籤 `existing_tags` 時，加入元素級去殼清洗防禦，自動清除歷史殘留之字串化括號與引號（如 `"['aaa']"`），杜絕去重失效所造成的 `["['aaa']", 'aaa']` 髒資料重複儲存問題。
+  - 同步確保 `tag_meta:{t}` 記錄與 Rich Menu 分配判定皆以乾淨純字串觸發。
+
 ## [2026-11-16] - 訊息中心前端標籤正規化解析修復 (消除雙重標籤與括號引號問題)
 ### Improved & Fixed (優化與修復)
 - **訊息中心前端標籤解析正規化 (`frontend/src/pages/MessageCenter.jsx`)**：
