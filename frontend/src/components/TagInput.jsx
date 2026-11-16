@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Tag as TagIcon, Plus } from 'lucide-react';
 import api from '../api';
 
-const TagInput = ({ tags = [], onChange, placeholder = "選擇或輸入標籤...", singleSelect = false }) => {
+const TagInput = ({ tags = [], onChange, placeholder = "選擇或輸入標籤...", singleSelect = false, disabled = false }) => {
     const [input, setInput] = useState('');
     const [availableTags, setAvailableTags] = useState([]);
     const [showDropdown, setShowDropdown] = useState(false);
@@ -70,6 +70,7 @@ const TagInput = ({ tags = [], onChange, placeholder = "選擇或輸入標籤...
     const inputRef = useRef(null);
 
     const handleContainerClick = () => {
+        if (disabled) return;
         inputRef.current?.focus();
         setShowDropdown(true);
     };
@@ -81,12 +82,13 @@ const TagInput = ({ tags = [], onChange, placeholder = "選擇或輸入標籤...
                 flexWrap: 'wrap',
                 gap: '8px',
                 padding: '10px 15px',
-                background: '#222',
-                border: '1px solid #444',
+                background: disabled ? '#1a1a1a' : '#222',
+                border: disabled ? '1px solid #333' : '1px solid #444',
                 borderRadius: '8px',
                 minHeight: '48px',
                 alignItems: 'center',
-                cursor: 'text',
+                cursor: disabled ? 'not-allowed' : 'text',
+                opacity: disabled ? 0.6 : 1,
                 transition: 'border-color 0.2s, box-shadow 0.2s'
             }} onClick={handleContainerClick}>
                 {tags.map((tag, idx) => (
@@ -102,42 +104,47 @@ const TagInput = ({ tags = [], onChange, placeholder = "選擇或輸入標籤...
                         border: '1px solid rgba(255, 215, 0, 0.3)'
                     }}>
                         {tag}
-                        <X
-                            size={12}
-                            style={{ cursor: 'pointer' }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveTag(tag);
-                            }}
-                        />
+                        {!disabled && (
+                            <X
+                                size={12}
+                                style={{ cursor: 'pointer' }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveTag(tag);
+                                }}
+                            />
+                        )}
                     </span>
                 ))}
                 <input
                     ref={inputRef}
                     type="text"
+                    disabled={disabled}
                     value={input}
                     onChange={(e) => {
+                        if (disabled) return;
                         setInput(e.target.value);
                         setShowDropdown(true);
                     }}
                     onKeyDown={handleKeyDown}
-                    onFocus={() => setShowDropdown(true)}
+                    onFocus={() => { if (!disabled) setShowDropdown(true); }}
                     placeholder={tags.length === 0 ? placeholder : ""}
                     style={{
                         flex: 1,
                         background: 'transparent',
                         border: 'none',
-                        color: 'white',
+                        color: disabled ? '#666' : 'white',
                         padding: '5px 0',
                         fontSize: '13px',
                         minWidth: '100px',
                         outline: 'none',
+                        cursor: disabled ? 'not-allowed' : 'text',
                         height: '30px' // 固定高度以確保點擊區域穩定
                     }}
                 />
             </div>
 
-            {showDropdown && (input || filteredAvailable.length > 0) && (
+            {!disabled && showDropdown && (input || filteredAvailable.length > 0) && (
                 <div style={{
                     position: 'absolute',
                     top: '100%',

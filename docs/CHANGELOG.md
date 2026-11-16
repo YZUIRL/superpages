@@ -1,21 +1,39 @@
 # CHANGELOG
 
-## [2026-10-19] 修復關鍵字回覆啟用狀態無法關閉 (Issue #39)、移除 Heroku 飛安帳號與 Line-Bot-Main 函式化 cronjobs 全線同步升級 (Issue #42)
-- **Heroku Superpages 飛安商案帳號移除**:
-  - 自 Heroku Superpages 主資料庫 (`permission_settings`) 安全移除 ID: 9（商案名稱：機場 / mwlarpbot），目前有效商案帳號為 3 個（`yzulabuse`, `yzuirl01`, `ikearrrbot`）。
-- **Line-Bot-Main 函式化 cronjobs 全面同步升級**:
-  - 將 `irl9014` 的「直接執行函式 (smart_eval 驅動)」cronjobs 架構全面同步至 Heroku 正式商案機器人分支（`yzulabuse`, `yzuirl01`, `ikearrrbot`, `irl9014`）並推播至 GitHub 觸發部署。
-  - `sensors/cronjobs.py`：以 `smart_eval.smartexec` 直接驅動函式，`yzuadmin` 執行系統層級廣播 `sys.bmcast`，個人用戶自動旅程執行 `get_out(qa(...))` 並自動發送與記錄對話紀錄；同時向前向下相容 `QA|` 標籤。
-  - `sensors/sys.py`：升級 `sys.bmcast` 與 `sys.nwcast`，自動安全解構字典、JSON 字串與 Line 外層包裹鍵，杜絕 KeyError。
-  - `sensors/dboperation.py`：將 `g_opr` 預設值修正為 `use_db=True`，確保群發推播於執行當下從資料庫動態撈取最新完整名單。
-- **關鍵字回覆啟用開關 React 19 非同步更新閉包競態修復 (Issue #39, `frontend/src/pages/RuleDesigner.jsx`)**:
-  - **根本原因排除**：修復關鍵字回覆列表點擊「啟用狀態」開關時，提示儲存成功但開關依然維持在啟用狀態、且無法關閉關鍵字觸發之問題。原先 `handleToggleRuleEnabled` 在 `setDraftRules` 內部非同步賦值 `updatedRule`，並透過 `setTimeout(..., 0)` 調用 `handleSaveRow`。在 React 19 批次更新機制下，`handleSaveRow` 被調用時 `updatedRule` 仍為 `null`，進而回退使用組件渲染閉包中的舊狀態（未停用狀態，`check: ['']`），造成將舊狀態覆寫回資料庫。
-  - **同步構造與實體傳遞**：改於 `handleToggleRuleEnabled` 外部直接基於當前規則資料同步構造包含 `check: ['False']` 的 `updatedRule` 物件，並將最新物件實體同步傳入 `handleSaveRow(index, updatedRule)`，徹底杜絕閉包讀取舊資料覆寫。
-- **排程群發訊息 cron_table 函式化驅動 (Issue #42, `backend/endpoints/broadcast.py`)**:
-  - 配合 Line-Bot-Main 端函式化升級，啟用 `yzuadmin` 單筆 `sys.bmcast` 動態排程寫入，達成排程推播精準動態抓名單。
-- **自動旅程重啟排程與單位相容性修復 (Issue #42, `backend/app.py`, `backend/utils/scheduler.py`)**:
-  - **時間單位與 tag 協議相容**：修復 `restart_project_user` 與 `batch_enroll_journey_users_internal`，SQL 查詢補齊 `interval_unit`（分鐘/小時/天），排程時間推算不再預設為小時。
-  - **統計處理器正規化升級**：升級 `project_stats_processor`，使查詢條件與正則解析同時相容 `QA|cron_` 與 `QA|project_` 標籤，防止以底線分割字串時拋出 `ValueError`。
+## [2026-11-16] - 標籤傳輸與儲存純文字格式對齊 (對齊外部機器人與消除重複髒資料)
+### Improved & Fixed (優化與修復)
+- **前端標籤傳輸格式對齊外部機器人 (`frontend/src/pages/MessageCenter.jsx`)**：
+  - 調整 `handleAddTag`：取消將標籤包裝為 Python List 陣列字串（`['aaa']`）之傳輸邏輯，改為針對每個標籤以純文字格式獨立發送 `set_tag|${tagName}`，使用 `Promise.all` 併發發送，格式完全對齊外部機器人服務（Line Bot Socket）。
+  - 保留 `handleDeleteTag` 原有行為，持續發送純文字指令 `del_tag|${tagName}`。
+- **後端入庫去殼清洗與歷史髒資料淨化 (`backend/app.py`)**：
+  - 在 `/api/trigger` 處理 `set_tag|` 時，全面支援純文字格式標籤解析，並對 `tag_list` 進行去引號與括號之元素級清洗。
+  - 在讀取 `Private_var` 既有標籤 `existing_tags` 時，加入元素級去殼清洗防禦，自動清除歷史殘留之字串化括號與引號（如 `"['aaa']"`），杜絕去重失效所造成的 `["['aaa']", 'aaa']` 髒資料重複儲存問題。
+  - 同步確保 `tag_meta:{t}` 記錄與 Rich Menu 分配判定皆以乾淨純字串觸發。
+
+## [2026-11-16] - 訊息中心前端標籤正規化解析修復 (消除雙重標籤與括號引號問題)
+### Improved & Fixed (優化與修復)
+- **訊息中心前端標籤解析正規化 (`frontend/src/pages/MessageCenter.jsx`)**：
+  - 封裝共用標籤正規化函式 `normalizeTagString`，支援將 Python 陣列字串（如 `"['aaa']"`、`"['aaa', 'bbb']"`）、逗號或管線分隔符號徹底拆解為純標籤名陣列，並去除最外層方括號、單雙引號及無效空值。
+  - 修復 `fetchUsers` 收到伺服器資料時，因字串未拆解導致「10 秒樂觀新增護欄」重複追加純文字標籤的 Bug，徹底消除畫面上同時出現 `['aaa']` 與 `aaa` 雙重標籤的問題。
+  - 將 `getCurrentUserTags` 與 `fetchAvailableTags` 同步收斂使用 `normalizeTagString`，確保用戶卡片、聊天室頂部標籤列與左側標籤篩選清單皆一致呈現乾淨的純文字標籤。
+
+
+## [2026-11-12] - 訊息中心「群組」與「個人」聊天室獨立管理功能與 Docker 部署設定校正
+### Added & Improved (新功能與優化)
+- **Docker 容器部署配置與反向代理 Port 對齊 (`frontend/nginx.conf`, `backend/Dockerfile`, `.env`)**：
+  - 修復 `frontend/nginx.conf` 中 `/api` 反向代理目標至 `http://backend:9017`（原寫死為 5000 導致 502 Bad Gateway）。
+  - 同步將 `backend/Dockerfile` 之 `EXPOSE` 埠號校正為 `9017`，確保前後端容器內部網路通信完全一致。
+  - 補齊根目錄 `.env` 基礎環境變數設定檔，保障 `docker compose up` 平穩無損構建啟動。
+- **後端 API 支援群組對話與 LEFT JOIN LATERAL 樞紐查詢 (`backend/app.py`)**：
+  - `GET /api/users`：新增 `type=all|personal|group` 篩選參數（預設為 `all` 向下相容）；移除硬編碼 `WHERE user_id LIKE 'U%'` 限制；個人以 `group_id IS NULL` 聚合判定，群組以 `group_id IS NOT NULL` 聚合判定並標記 `is_group: true`；群組名稱預設顯示 `群組(後6碼)`，整合 `is_left` 退出狀態探測。
+  - `GET /api/history/<id>`：自動辨識個人私聊與群組聊天室。若為群組，全面採用 PostgreSQL `LEFT JOIN LATERAL` 於單一 SQL 內完成發話成員 `Private_var` 姓名 (`sender_name`) 與頭像 (`sender_pic`) 之逐列關聯樞紐（Pivot），徹底杜絕 N+1 查詢瓶頸（$O(1)$ 複雜度）。
+  - `POST /api/trigger`：發送目標為群組 ID 時，檢驗群組是否為退群 (Leave) 狀態，若已退群則阻擋發送並回傳 400，防止 LINE API 拋出異常。
+- **前端訊息中心頁籤與群組互動升級 (`frontend/src/pages/MessageCenter.jsx`, `frontend/src/components/TagInput.jsx`)**：
+  - 側邊欄頂部新增「全部 / 個人 / 群組」頁籤切換，點擊即時傳遞 `type` 至後端分流檢索。
+  - 側邊欄項目視覺化區隔：群組項目顯示黃色圓底群組圖示 (`Users`) 與 `群組` 徽章，退群對象顯示 `已退群` 徽章。
+  - 對話視窗 Header：群組聊天室隱藏個人標籤展示，將右上方「標籤管理」（`TagInput` 與按鈕）置為停用（Disabled）狀態，提示「群組模式不支援標籤」。
+  - 對話訊息氣泡：群組聊天室內成員發言氣泡上方清楚標示成員頭像與暱稱 (`m.sender_pic`, `m.sender_name`)。
+  - 退群防呆機制：當檢測到群組處於退群狀態 (`is_left: true`) 時，訊息輸入框與發送按鈕直接停用並以紅色警告條提示「已退出該群組，無法發送訊息」。
 
 ## [2026-10-12] GitHub 圖片上傳 EOF 讀取修復與電腦版 LIFF 問卷提示「請使用LINE開啟此連結」
 - **GitHub 圖片上傳端點串流 EOF 缺陷修復 (`backend/endpoints/upload.py`, `frontend/src/pages/LiffQuestionnaire.jsx`)**:
@@ -93,11 +111,6 @@
   - 依「方案 A」規範將 WebSocket 發送之 `Sensor` 事件訊息格式擴充為：`Liffquestionnaire|<survey_key>|<存在資料庫的id>|<答案1>|<答案2>|.....`。
   - 將 `<survey_key>`（問卷唯一鍵值）作為事件訊息的第 1 個參數注入，並防呆過濾特殊字元 `|` 為 `/`。
   - 使 Line Bot 核心或 Q_bank 法則能依據單一問卷識別碼進行精準匹配與條件分流（如 `Liffquestionnaire|<survey_key>|*`），大幅提升問卷與機器人自動化互動的彈性。
-
-## [2026-10-05] 合併 main 分支至 deploy-heroku 並保留 Heroku 效能配置
-- **分支合併**: 安全將 main 最新功能（包含問卷 Sensor 通知、全域資安防護、40 端點鑑權、來源透明化等）合併至 deploy-heroku。
-- **衝突排除**: 成功排除 6 個衝突檔案（backend/app.py, FlexMessageEditor.jsx, RuleDesigner.jsx, docs/ARCHITECTURE.md, CHANGELOG.md）。
-- **Heroku 專屬效能保留**: 嚴格保留 Procfile 之 gthread 多執行緒配置 (--workers 1 --threads 8 -k gthread --timeout 60) 與 backend/app.py 的 bot_info_cache 快取機制，杜絕 Heroku 503 錯誤。
 
 ## [2026-10-02] LIFF 問卷完成後自動發送 Sensor 事件通知官方帳號
 - **LIFF 問卷提交完成事件 (`backend/endpoints/liff_questionnaire.py`)**:
@@ -214,10 +227,6 @@
   - 實作單一啟用限制檔護與提示 alert。
   - 在側邊欄與 Routes 註冊「加入好友設定」選單與路由。
 
-
-## [2026-07-29] Heroku 503 錯誤優化與 Gunicorn 多執行緒佈署
-- **佈署設定 (Procfile)**: 將 Gunicorn 啟動參數升級為 --workers 1 --threads 8 -k gthread --timeout 60，啟用 gthread 異步線程模式，避免單一線程阻塞引發 Heroku 30 秒 Timeout (503 Error)。
-- **後端快取 (backend/app.py)**: 在 /api/my_oas 中為 LINE Bot Profile (https://api.line.me/v2/bot/info) 新增 TTL 600s 的記憶體快取，徹底消除切換頁面時因大量同步 HTTP 連線鎖死 Worker 的瓶頸。
 
 ## [2026-07-21] 問卷管理 note 欄位前綴格式變更
 - **後端/前端 (`frontend/src/pages/RuleDesigner.jsx`, `frontend/src/pages/Questionnaire.jsx`, `backend/endpoints/questionnaire.py`)**: 變更問卷管理頁面寫入 DB 時 `note` 欄位的格式，將後綴 ` - 問卷管理` 更改為前綴 `問卷管理 - `。
@@ -754,3 +763,15 @@
   - `frontend/src/pages/RuleDesigner.jsx` 新增 `window.onbeforeunload` 監聽，在編輯中或開啟彈窗時阻止誤觸 F5、重新整理或關閉視窗造成草稿遺失。
 - **網路異常與斷線全域處理**：
   - `frontend/src/api.js` 新增網路斷線與 502/503 伺服器異常事件派發，提升系統在極端網路狀況下的健壯性。
+
+## [2026-11-16] - LIFF 問卷排程時間步進 (5 分鐘) 與前後端時間正規化
+### Added & Improved
+- **前端時間選擇器 5 分鐘步進與容錯校準 (`frontend/src/pages/LiffQuestionnaire.jsx`)**：
+  - 「開始時間」與「結束時間」的 MUI `TextField`（`type="datetime-local"`）加入 `inputProps={{ step: 300 }}`，限制瀏覽器原生選擇器分鐘欄位僅呈現以 5 分鐘為間隔之選項（`00, 05, 10, 15, ..., 55`）。
+  - 新增 `roundToNearest5Minutes` 輔助函式：
+    - 當使用者以鍵盤直接手動輸入非 5 倍數分鐘時，於 `onBlur` 失焦時自動執行四捨五入對齊至最近的 5 分鐘倍數。
+    - 載入歷史問卷（`handleEditSurvey`）時自動對齊分鐘，消除原生 HTML5 表單驗證因歷史非 5 倍數時間引發之 `stepMismatch` 阻擋問題。
+    - 在表單送出（`handleSubmit`）時進行防呆檢驗，確保「結束時間必須晚於開始時間」，並正規化送出之 `start_time` 與 `end_time`。
+- **後端時間防禦性正規化與檢核 (`backend/endpoints/liff_questionnaire.py`)**：
+  - 新增 `_align_to_5_minutes` 函式，在 `_parse_time` 解析 datetime 物件時，自動四捨五入對齊至最接近之 5 分鐘倍數，並將秒數與微秒歸零。
+  - 在 `create_survey`（POST）與 `update_survey`（PUT）端點中，加入「結束時間必須晚於開始時間」防呆驗證，若不符則回傳 400 Bad Request，確保入庫資料之正確性與嚴謹度。

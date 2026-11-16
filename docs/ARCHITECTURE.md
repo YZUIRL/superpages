@@ -442,43 +442,6 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
   - **桌面環境檢測**：封裝 `isDesktopBrowser()` 檢測函式，結合 `liff.isInClient()` 與 User-Agent 行動裝置特徵偵測，精準過濾桌面版環境（PC / Mac 瀏覽器，非手機 LINE App）。
   - **友善專屬攔截畫面**：當於桌面瀏覽器開啟問卷時，立即中斷非必要的 API 請求與 LIFF 網頁登入跳轉，渲染出沉浸式深色提示卡片，文案明確標註「**請使用LINE開啟此連結**」，並提供「📋 複製問卷連結」一鍵複製與 SweetAlert2 提示按鈕，大幅優化電腦版用戶體驗。
 
-### 18.7 關鍵字回覆啟用狀態非同步閉包修復與排程廣播/自動旅程 cron_table 協議還原架構 (2026-10-19 新增)
-- **關鍵字回覆啟用開關 React 19 狀態非同步更新與閉包覆蓋修復 (Issue #39, `frontend/src/pages/RuleDesigner.jsx`)**：
-  - **根本原因排除**：先前前端實作中，`handleToggleRuleEnabled` 使用 `let updatedRule = null; setDraftRules(prevRules => { ... updatedRule = ... }); if (autoSave) setTimeout(() => handleSaveRow(index, updatedRule), 0);`。在 React 19 的非同步批次更新下，`setTimeout` 執行時 `setDraftRules` 的 updater callback 尚未執行，導致傳入 `handleSaveRow` 的 `updatedRule` 仍為 `null`。而 `handleSaveRow` 在未收到覆蓋值時回退使用渲染閉包中的 `draftRules[index]`（尚未變更的啟用舊狀態，`check: ['']`），造成將「開」的狀態再次儲存回資料庫，隨後刷新列表，開關始終無法關閉。
-  - **同步構造與即時傳遞**：重構為先於外部基於 `draftRules[index]` 同步計算並組裝出包含 `check: ['False']` 的 `updatedRule` 物件，隨後同步呼叫 `setDraftRules` 更新介面並直接傳遞實體呼叫 `handleSaveRow(index, updatedRule)`，徹底杜絕閉包異步競態。
-- **排程群發訊息與自動旅程 cron_table 任務協議還原架構 (Issue #42, `backend/endpoints/broadcast.py`, `backend/app.py`, `backend/utils/scheduler.py`)**：
-  - **Line-Bot-Main 排程執行引擎機制相容性**：
-    - `Line-Bot-Main/sensors/cronjobs.py` 在輪詢 `cron_table` 執行排程推播時，採用 `system_setting.syshandler(user_id, f"cron|{message_content}")` 發送 Sensor 事件至機器人核心。
-    - 機器人題庫 `Q_bank` 唯一能夠匹配排程推播的規則為 `content: ['cron|QA|*']`，執行 `get_out(qa(c_cut(2)))`。
-  - **排程廣播推播失敗自動刪除根因修復 (`backend/endpoints/broadcast.py`)**：
-    - 2026-08-31 的版本中曾將排程廣播改為由 `user_id = 'yzuadmin'` 寫入單一函式 `sys.bmcast(m, qa('{tag}'))`。輪詢時組合為 `cron|sys.bmcast(...)`，因無法匹配題庫任何規則而被 Line-Bot-Main 靜默忽略，隨後被認定執行完畢自 `cron_table` 刪除，導致「推播未發送但在 cron_table 被自動刪除」。
-    - 還原為標準群發機制：排程執行時動態解析受眾名單，以 `execute_values` 將所有受眾用戶批次寫入 `cron_table`，`message_content` 統一規範為 `QA|{message_tag}`，受眾為空時提供友好提示，100% 確保訊息準確觸發與送達。
-  - **自動旅程重啟與定時單位相容修復 (`backend/app.py`)**：
-    - 修復 `restart_project_user` 與 `batch_enroll_journey_users_internal`，SQL 查詢補全 `interval_unit`（分鐘/小時/天），排程時間推算不再預設為小時。
-    - 訊息內容還原為標準 `QA|{msg_tag}`，廢除無法被解析的 `get_out(qa('{tag}'))`。
-  - **統計處理器多格式正規化解析 (`backend/utils/scheduler.py`)**：
-    - 升級 `project_stats_processor`，SQL 查詢同時相容 `QA|cron_` 與 `QA|project_` 標籤，並透過正則表達式正規化提取 `project_id` 與 `step_id`，徹底解決舊版以底線硬性 `split` 導致的字串解析崩潰問題。
-
-### 18.8 Heroku 飛安帳號移除與 Line-Bot-Main 函式化 cronjobs 全線同步升級架構 (2026-10-19 新增)
-- **Heroku Superpages 飛安商案帳號移除**：
-  - 自 Heroku Superpages 主資料庫（`permission_settings`）安全移除 ID: 9（商案名稱：機場 / mwlarpbot）。
-  - 經關聯性查核，確認無任何外鍵約束受損，亦無任何一般帳號權限綁定該 OA，移除作業達成零停機與零副作用。
-  - 目前 Heroku Superpages 運行的有效 OA 維持 3 個：`superpages` (`yzulabuse`)、`蔡森數位創意` (`yzuirl01`)、`小游測試` (`xiaoyou_test` / `ikearrrbot`)。
-- **Line-Bot-Main 多商案機器人函式化驅動 cronjobs 全面升級**：
-  - 將 `irl9014` 的「直接執行函式 (smart_eval 驅動)」cronjobs 架構全面同步至 Heroku 正式商案機器人分支：
-    - `yzulabuse` (Heroku: yzulabuse)
-    - `yzuirl01` (Heroku: yzuirl01-5f3ca717277d)
-    - `ikearrrbot` (Heroku: ikearrrbot)
-    - `irl9014` (多機器人開發主幹)
-  - 核心模組升級要點：
-    1. `sensors/cronjobs.py`：以 `smart_eval.smartexec` 直接驅動函式，`yzuadmin` 執行系統層級廣播 `sys.bmcast`，個人用戶自動旅程執行 `get_out(qa(...))` 並自動發送與記錄對話紀錄；同時向前向下相容 `QA|` 標籤。
-    2. `sensors/sys.py`：升級 `sys.bmcast` 與 `sys.nwcast`，自動安全解構字典、JSON 字串與 Line 外層包裹鍵，杜絕 KeyError。
-    3. `sensors/dboperation.py`：將 `g_opr` 預設值修正為 `use_db=True`，確保群發推播於執行當下從資料庫動態撈取最新完整名單。
-- **Superpages 排程發送端升級**：
-  - [backend/endpoints/broadcast.py](file:///c:/Users/70640/Documents/GitHub/superpages/backend/endpoints/broadcast.py) 配合機器人端函式化支援，啟用 `yzuadmin` 單筆 `sys.bmcast` 動態排程寫入，達成排程推播精準動態抓名單。
-
-
-
 
 
 
@@ -536,3 +499,88 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - 調整 `backend/endpoints/liff_questionnaire.py` (`public_submit_response`) 發送 WebSocket `Sensor` 事件之結構：維持 `"user": identity["line_user_id"]` 為填答者個人 LINE UID，並以獨立欄位 `"groupid": source_meta.get("group_id") or None` 傳遞來源群組 ID，確保 `Line-Bot-Main` 執行法則表時能正確以個人 `user_id` 讀取 `Private_var` (`pri(...)`) 與狀態機，同時將回覆與後續非同步 API 事件發送至目標群組。
 
 - 擴充 LIFF 問卷答案類型 (`frontend/src/pages/LiffQuestionnaire.jsx`, `backend/endpoints/liff_questionnaire.py`)：將原本單一「文字」拆分為「文字 (`text`)」（單行不可換行）與「多行文字 (`textarea`)」（多行可換行），後端 `_validate_answer` 對 `text` 自動將換行字元正規化為空白，對 `textarea` 保留多行文字。
+
+
+## [2026-11-12] 訊息中心群組與個人聊天室獨立管理架構 (Message Center Session Architecture)
+
+### 1. 核心理念與 Session Key 聚合模型
+商案歷史對話表 `history:{app_name}` 同時承載 1-on-1 個人私聊與群組多方對話。為避免對既有資料庫架構進行侵入性改動，系統在邏輯層將 Session Key 徹底解耦：
+- **個人對話 (Personal Session)**：
+  - **判定條件**：`group_id IS NULL` 且 `user_id NOT IN ('all', 'yzuadmin', 'system')` 且 `user_id NOT LIKE 'bc_%'`。
+  - **Session Key**：`user_id`。
+  - **屬性來源**：從 `Private_var:{app_id}` 關聯用戶 `name`、`pic`、`tag`、`unread_count`，依最後 Follow 事件判定 `is_following`。
+- **群組對話 (Group Session)**：
+  - **判定條件**：`group_id IS NOT NULL`。
+  - **Session Key**：`group_id`。
+  - **識別標記**：`is_group: true`。
+  - **名稱與識別**：預設為 `'群組(' || RIGHT(group_id, 6) || ')'`，頭像設為群組識別圖示。
+  - **退群狀態 (Leave Detection)**：查詢群組最新之 Join/Leave 事件，若最新事件為 Leave 則判定 `is_left: true`。
+
+### 2. SQL CTE 查詢分流架構
+在 `GET /api/users` API 中，利用 CTE（Common Table Expressions）進行條件分流，支援 `type=all|personal|group` 篩選：
+```sql
+WITH personal_cte AS (
+    SELECT user_id, NULL::text as group_id, FALSE as is_group, MAX(timestamp) as last_time
+    FROM "history:{app_id}"
+    WHERE group_id IS NULL AND user_id NOT IN ('all', 'yzuadmin', 'system') AND user_id NOT LIKE 'bc_%'
+    GROUP BY user_id
+),
+group_cte AS (
+    SELECT group_id as user_id, group_id, TRUE as is_group, MAX(timestamp) as last_time
+    FROM "history:{app_id}"
+    WHERE group_id IS NOT NULL
+    GROUP BY group_id
+),
+raw_sessions AS (
+    -- 依據 type 參數執行 personal_cte、group_cte 或 UNION ALL 聯合查詢
+)
+```
+在外層統一以 `last_time DESC NULLS LAST` 排序並限制前 200 筆，保障資料庫在海量歷史數據下的極致檢索效能。
+
+### 3. 發話者資訊逐列樞紐架構 (LEFT JOIN LATERAL)
+在 `GET /api/history/<group_id>` 群組歷史對話中，群組訊息包含多位成員的交互發言。為避免 N+1 查詢與傳統多表 JOIN 產生的笛卡兒積膨脹，採用 PostgreSQL 原生之 `LEFT JOIN LATERAL` 於單一 SQL 查詢中完成 EAV 模型屬性橫向樞紐化（Pivot）：
+```sql
+SELECT h.*,
+       COALESCE(sender_info.sender_name, '') as sender_name,
+       COALESCE(sender_info.sender_pic, '') as sender_pic
+FROM "history:{app_id}" h
+LEFT JOIN LATERAL (
+    SELECT 
+        MAX(CASE WHEN pv.name = 'name' THEN pv.value END) AS sender_name,
+        MAX(CASE WHEN pv.name = 'pic'  THEN pv.value END) AS sender_pic
+    FROM "Private_var:{app_id}" pv
+    WHERE pv.user_id = h.user_id
+) sender_info ON TRUE
+WHERE h.group_id = %s
+ORDER BY h.timestamp ASC;
+```
+此架構保證了每一次群組對話載入均具備 $O(1)$ 的查詢時間複雜度，並在前端對話氣泡上方即時呈現發話者的真實暱稱與頭像。
+
+### 4. 前端標籤資料正規化與操作護欄架構 (2026-11-16)
+- **標籤格式異構性與清洗機制 (`normalizeTagString`)**：
+  - 後端 `Private_var` 的 `tag` 欄位以 Python 陣列字串（如 `['aaa']`、`['aaa', 'bbb']`）儲存，且多筆記錄由 PostgreSQL `string_agg` 以 `|` 串接。
+  - 前端在 `fetchUsers` 接收資料時，先經由 `normalizeTagString` 進行階層式拆解：以 `|` 分割 ➔ 剝除首尾外層方括號 `[` 與 `]` ➔ 以逗號 `,` 拆解子元素 ➔ 剝除單引號 `'` 與雙引號 `"` ➔ 排除 `null`、`undefined`、`[]` 等雜質，保證進到記憶體狀態的永遠為乾淨的純文字陣列。
+- **10 秒操作護欄比對對齊**：
+  - 用戶在新增標籤時，記憶體護欄（`pendingTagAdditionsRef`）以純文字（如 `aaa`）為鍵。
+  - 當伺服器回傳之標籤資料在第一時間完成正規化為純文字陣列（`tagParts`）後，`tagParts.includes(t)` 比對結果完全精準，消除了因鍵名格式脫節造成的重複追加（`['aaa']|aaa`）問題。
+
+### 5. 標籤純文字傳輸與雙系統資料庫去重架構 (2026-11-16)
+- **外部機器人純文字通訊協定對齊**：
+  - 外部 Line Bot 服務對於 Socket 事件之 `set_tag|` 與 `del_tag|` 採純文字解析模式。若傳送陣列封裝字串（如 `set_tag|['aaa']`），外部機器人會將整個括號引號字串視為標籤本體存入資料庫。
+  - 前端 `MessageCenter.jsx` 全面改為純文字指令發送：`set_tag|${tagName}` 與 `del_tag|${tagName}`。多標籤情境採用 `Promise.all` 逐筆發送純文字訊息，達成雙方協定百分之百對齊。
+- **後端入庫元素級去殼與去重防禦機制**：
+  - 後端 `/api/trigger` 在處理 `set_tag|` 時，除了支援純文字與舊格式解析，針對待新增的 `tag_list` 與從資料庫取出之既有標籤 `existing_tags`，一律執行元素級 `strip("[]'\" ")` 去殼清洗。
+  - 此機制消除了 Python 字串比對時 `"['aaa']" != 'aaa'` 造成的 `dict.fromkeys` 去重失效問題，確保資料庫儲存的標籤列表永遠只有乾淨的純文字標籤（如 `['aaa', 'bbb']`），且能在用戶下一次新增標籤時自動淨化該用戶之歷史髒資料。
+
+
+
+### 6. LIFF 問卷排程時間欄位校準機制與無縫更新架構 (2026-11-16)
+- **原生時間選擇器 5 分鐘步進與 HTML5 相容規範**：
+  - 前端採用 HTML5 標準的 `<input type="datetime-local" step="300">` 封裝於 MUI `TextField`。
+  - 設定 `step: 300`（300 秒 = 5 分鐘）使 WebKit / Blink 等標準瀏覽器原生 Picker 在展開分針或分鐘下拉選單時，嚴格以 5 分鐘為間距刻度呈現（`00, 05, 10, 15, ..., 55`），減少管理員微調誤觸率。
+- **雙端四捨五入正規化 (Normalization) 與跨日時鐘邊界容錯**：
+  - **前端護欄 (`roundToNearest5Minutes`)**：針對手動鍵入（鍵盤繞過 Picker）情境，於 `onBlur` 失焦時利用時間戳記四捨五入至最近的 5 分鐘倍數（例如 `14:12` ➔ `14:10`，`14:13` ➔ `14:15`，`23:58` ➔ 隔日 `00:00`），並在既有問卷載入時預先校正，防止歷史非 5 倍數時間造成瀏覽器原生 `stepMismatch` 阻擋表單提交。
+  - **後端防禦 (`_align_to_5_minutes`)**：在 `backend/endpoints/liff_questionnaire.py` 的 `_parse_time` 解析層加入時間對齊運算，確保任何由 API 寫入之開始與結束時間秒數與微秒必為 00，分鐘必為 5 之倍數。
+- **時序邏輯檢核與無縫熱更新 (Zero-Downtime Hot-Reload)**：
+  - 前後端均設有時序檢驗（`end_time > start_time`），避免設定邏輯矛盾。
+  - 問卷填答 API 維持無狀態設計（Stateless），排程判定採用標準 PostgreSQL `TIMESTAMP` 比較（`start_time <= now_tw <= end_time`），發布熱更新過程完全不中斷既有問卷填答之用戶。

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Swal from 'sweetalert2';
 import { useLocation } from 'react-router-dom';
 import api from '../api';
-import { Send, User, Info, Search, Tag, X, Image as ImageIcon, Mic, Video, Smile, ArrowDown, RefreshCw, MousePointerClick } from 'lucide-react';
+import { Send, User, Users, Info, Search, Tag, X, Image as ImageIcon, Mic, Video, Smile, ArrowDown, RefreshCw, MousePointerClick } from 'lucide-react';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { CircularProgress } from '@mui/material';
@@ -140,6 +140,45 @@ class MessageCenterErrorBoundary extends React.Component {
     }
 }
 
+// 輔助函式：正規化標籤字串，將 Python 陣列字串 (如 "['aaa']")、逗號或管線分隔字串徹底拆解為純標籤名陣列
+const normalizeTagString = (rawTagsInput) => {
+    if (!rawTagsInput) return [];
+    const inputStr = typeof rawTagsInput === 'string' ? rawTagsInput : String(rawTagsInput);
+    let tags = [];
+
+    // 先以 | 切分（後端 string_agg 預設以 | 聚合多筆記錄）
+    const parts = inputStr.split('|');
+    parts.forEach(part => {
+        let trimmed = part.trim();
+        if (!trimmed) return;
+
+        // 若為 ['a', 'b'] 陣列格式
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            const inner = trimmed.substring(1, trimmed.length - 1);
+            inner.split(',').forEach(item => {
+                const cleaned = item.trim().replace(/^['"]+|['"]+$/g, '');
+                if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                    tags.push(cleaned);
+                }
+            });
+        } else if (trimmed.includes(',')) {
+            trimmed.split(',').forEach(item => {
+                const cleaned = item.trim().replace(/^['"]+|['"]+$/g, '');
+                if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                    tags.push(cleaned);
+                }
+            });
+        } else {
+            const cleaned = trimmed.replace(/^['"]+|['"]+$/g, '');
+            if (cleaned && cleaned !== 'null' && cleaned !== 'undefined' && cleaned !== '[]' && cleaned !== '{}') {
+                tags.push(cleaned);
+            }
+        }
+    });
+
+    return [...new Set(tags)];
+};
+
 function MessageCenter() {
     const location = useLocation();
     const [users, setUsers] = useState([]);
@@ -184,6 +223,7 @@ function MessageCenter() {
     const pendingTagAdditionsRef = useRef({});
 
     // --- 搜尋與篩選狀態 ---
+    const [chatTypeTab, setChatTypeTab] = useState('all');       // 頁籤：'all' | 'personal' | 'group'
     const [searchQuery, setSearchQuery] = useState('');          // 用戶清單搜尋（user_id / 名稱）
     const [selectedTagFilters, setSelectedTagFilters] = useState([]); // 標籤篩選
     const [messageSearch, setMessageSearch] = useState('');       // 對話內容搜尋
@@ -205,7 +245,7 @@ function MessageCenter() {
         setSearchQuery('');
         setSelectedTagFilters([]);
         setMessageSearch('');
-        fetchUsers();
+        fetchUsers('', [], chatTypeTab);
     }, [location.pathname]);
 
     useEffect(() => {
@@ -255,20 +295,20 @@ function MessageCenter() {
         }
     }, [selectedUser, users]);
 
-    // 當搜尋條件改變，debounce 後重新抓取用戶，並重置側邊欄顯示數量
+    // 當搜尋條件或頁籤改變，debounce 後重新抓取用戶，並重置側邊欄顯示數量
     useEffect(() => {
         setSidebarDisplayCount(15); // 搜尋條件變動時重置
         setLoadingUsers(true);
         if (searchTimer.current) clearTimeout(searchTimer.current);
         searchTimer.current = setTimeout(() => {
-            fetchUsers(searchQuery, selectedTagFilters);
+            fetchUsers(searchQuery, selectedTagFilters, chatTypeTab);
         }, 300);
         return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
-    }, [searchQuery, selectedTagFilters]);
+    }, [searchQuery, selectedTagFilters, chatTypeTab]);
 
-    const fetchUsers = async (q = '', tags = []) => {
+    const fetchUsers = async (q = '', tags = [], type = chatTypeTab) => {
         try {
-            const params = {};
+            const params = { type };
             if (q) params.q = q;
             if (tags.length > 0) params.tag = tags.join(',');
             const resp = await api.get('/users', { params });
@@ -315,10 +355,10 @@ function MessageCenter() {
                     let result = nu;
                     // --- 標籤操作護欄 (10秒機制) ---
                     const now = Date.now();
-                    const currentTagsStr = typeof result.tags === 'string' ? result.tags : String(result.tags || '');
-                    let tagParts = currentTagsStr.split('|').map(t => t.trim().replace(/^['"]|['"]$/g, '')).filter(t => t);
+                    // 1. 第一時間將伺服器回傳之 tags 徹底拆解為純標籤名陣列（消除最外層 [、] 與引號）
+                    let tagParts = normalizeTagString(result.tags);
 
-                    // 1. 處理刪除護欄：濾掉 10 秒內被刪除的標籤
+                    // 2. 處理刪除護欄：濾掉 10 秒內被刪除的標籤
                     const pendingDels = pendingTagDeletionsRef.current[nu.user_id];
                     if (pendingDels) {
                         tagParts = tagParts.filter(t => {
@@ -329,7 +369,7 @@ function MessageCenter() {
                         });
                     }
 
-                    // 2. 處理新增護欄：補回 10 秒內新增、但伺服器回傳中缺失的標籤
+                    // 3. 處理新增護欄：比對純文字標籤，若未包含才追加
                     const pendingAdds = pendingTagAdditionsRef.current[nu.user_id];
                     if (pendingAdds) {
                         Object.entries(pendingAdds).forEach(([t, addedAt]) => {
@@ -383,39 +423,7 @@ function MessageCenter() {
     const getCurrentUserTags = (userObj) => {
         const user = userObj || users.find(u => u.user_id === selectedUser);
         if (!user || !user.tags) return [];
-
-        let tagsInput = user.tags;
-        let tagList = [];
-
-        // 處理分割符 |
-        const rawParts = typeof tagsInput === 'string' ? tagsInput.split('|') : [tagsInput];
-
-        rawParts.forEach(part => {
-            if (!part) return;
-            let trimmed = String(part).trim();
-
-            // 處理 ['A', 'B'] 這種字串
-            if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-                // 移除前後方括號，然後依照逗號分割
-                const inner = trimmed.substring(1, trimmed.length - 1);
-                // 處理逗號分割並移除引號
-                inner.split(',').forEach(s => {
-                    const s_clean = s.trim().replace(/^['"]|['"]$/g, '');
-                    if (s_clean) tagList.push(s_clean);
-                });
-            } else if (trimmed.includes(',')) {
-                trimmed.split(',').forEach(s => {
-                    const s_clean = s.trim().replace(/^['"]|['"]$/g, '');
-                    if (s_clean) tagList.push(s_clean);
-                });
-            } else {
-                tagList.push(trimmed.replace(/^['"]|['"]$/g, ''));
-            }
-        });
-
-        // 最終清理與去重
-        const uniqueTags = [...new Set(tagList.map(t => String(t).trim()).filter(t => t && t !== 'null' && t !== 'undefined' && t !== '[]' && t !== '{}'))];
-        return uniqueTags;
+        return normalizeTagString(user.tags);
     };
 
     // --- 輔助：格式化側邊欄的最後一則訊息 ---
@@ -690,12 +698,12 @@ function MessageCenter() {
             // 2. 每 15 秒更新一次側邊欄用戶清單 (15s)
             // 只有在沒有搜尋查詢時才自動更新
             if (tickCount % 5 === 0 && !searchQuery) {
-                fetchUsers(searchQuery, selectedTagFilters);
+                fetchUsers(searchQuery, selectedTagFilters, chatTypeTab);
             }
         }, 3000);
 
         return () => clearInterval(pollInterval);
-    }, [selectedUser, searchQuery, selectedTagFilters]);
+    }, [selectedUser, searchQuery, selectedTagFilters, chatTypeTab]);
 
     // 捲軸功能與新訊息偵測
     const messagesEndRef = useRef(null);
@@ -821,9 +829,14 @@ function MessageCenter() {
     const fetchAvailableTags = async () => {
         try {
             const resp = await api.get('/tags');
-            // 後端已經處理過一部分，但保險起見前端再做一次清理
-            const tags = resp.data || [];
-            setAvailableTags(tags);
+            // 後端已經處理過一部分，前端使用 normalizeTagString 確保徹底剝離所有括號與引號
+            const rawTags = resp.data || [];
+            const cleanedTags = [];
+            rawTags.forEach(t => {
+                const parsed = normalizeTagString(t);
+                cleanedTags.push(...parsed);
+            });
+            setAvailableTags([...new Set(cleanedTags)]);
         } catch (err) {
             console.error('Error fetching tags:', err);
         }
@@ -867,7 +880,8 @@ function MessageCenter() {
         if (!tagInput || tagInput.length === 0 || !selectedUser) return;
         
         const userId = selectedUser;
-        const tagNames = tagInput;
+        const tagNames = tagInput.map(t => String(t).trim()).filter(t => t);
+        if (tagNames.length === 0) return;
 
         // 將標籤加入「正在新增中」的追蹤清單，紀錄時間戳記，護欄時間為 10 秒
         if (!pendingTagAdditionsRef.current[userId]) {
@@ -877,16 +891,20 @@ function MessageCenter() {
             pendingTagAdditionsRef.current[userId][tagName] = Date.now();
         });
 
-        const tagsStr = `[${tagNames.map(t => `'${t}'`).join(', ')}]`;
         setTagInput([]);
 
         try {
-            await api.post('/trigger', {
-                user: userId,
-                message: `set_tag|${tagsStr}`,
-                type: 'Sensor',
-                api_index: 0
-            });
+            // 對齊外部機器人格式：以純文字格式發送 set_tag|{tag}
+            await Promise.all(
+                tagNames.map(tagName =>
+                    api.post('/trigger', {
+                        user: userId,
+                        message: `set_tag|${tagName}`,
+                        type: 'Sensor',
+                        api_index: 0
+                    })
+                )
+            );
             showToast(`已新增標籤: ${tagNames.join(', ')}`, 'success');
             fetchAvailableTags(); // 立即重新整理標籤篩選清單
             
@@ -1086,6 +1104,37 @@ function MessageCenter() {
                     )}
                 </div>
 
+                {/* 聊天室類型切換頁籤 (全部 / 個人 / 群組) */}
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                    {[
+                        { key: 'all', label: '全部' },
+                        { key: 'personal', label: '個人' },
+                        { key: 'group', label: '群組' }
+                    ].map(tab => (
+                        <button
+                            key={tab.key}
+                            onClick={() => {
+                                setChatTypeTab(tab.key);
+                                setSidebarDisplayCount(15);
+                            }}
+                            style={{
+                                flex: 1,
+                                padding: '6px 0',
+                                fontSize: '12px',
+                                fontWeight: chatTypeTab === tab.key ? 'bold' : 'normal',
+                                borderRadius: '6px',
+                                border: chatTypeTab === tab.key ? '1px solid var(--primary-yellow)' : '1px solid #333',
+                                backgroundColor: chatTypeTab === tab.key ? 'rgba(255, 215, 0, 0.15)' : '#222',
+                                color: chatTypeTab === tab.key ? 'var(--primary-yellow)' : '#888',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <div style={{ fontSize: '12px', color: '#666', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         用戶列表 {loadingUsers ? '' : `(${filteredUsers.length})`}
@@ -1217,11 +1266,43 @@ function MessageCenter() {
                                         </div>
                                     )}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                        <UserAvatar userId={u.user_id} picUrl={u.pic} size={34} style={{ flexShrink: 0 }} />
+                                        {u.is_group ? (
+                                            <div style={{
+                                                width: '34px',
+                                                height: '34px',
+                                                borderRadius: '50%',
+                                                backgroundColor: 'rgba(255, 215, 0, 0.2)',
+                                                border: '1px solid var(--primary-yellow)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                flexShrink: 0
+                                            }}>
+                                                <Users size={18} color="var(--primary-yellow)" />
+                                            </div>
+                                        ) : (
+                                            <UserAvatar userId={u.user_id} picUrl={u.pic} size={34} style={{ flexShrink: 0 }} />
+                                        )}
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
-                                            <p style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name || u.user_id}</p>
-                                            <p style={{ fontSize: '12px', color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatSidebarMessage(u) || '尚無訊息'}</p>
-                                            {userTags.length > 0 && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <p style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', margin: 0 }}>
+                                                    {u.name || u.user_id}
+                                                </p>
+                                                {u.is_group && (
+                                                    <span style={{ fontSize: '10px', backgroundColor: 'var(--primary-yellow)', color: '#000', padding: '1px 5px', borderRadius: '4px', fontWeight: 'bold' }}>
+                                                        群組
+                                                    </span>
+                                                )}
+                                                {u.is_left && (
+                                                    <span style={{ fontSize: '10px', backgroundColor: '#555', color: '#ccc', padding: '1px 5px', borderRadius: '4px' }}>
+                                                        已退群
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p style={{ fontSize: '12px', color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px', marginBottom: 0 }}>
+                                                {formatSidebarMessage(u) || '尚無訊息'}
+                                            </p>
+                                            {!u.is_group && userTags.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '4px' }}>
                                                     {userTags.slice(0, 3).map((t, i) => (
                                                         <span key={i} style={{ fontSize: '10px', color: '#FFD700', backgroundColor: 'rgba(255,215,0,0.1)', padding: '1px 6px', borderRadius: '8px', border: '1px solid rgba(255,215,0,0.2)' }}>
@@ -1254,60 +1335,106 @@ function MessageCenter() {
                     <>
                         {/* 聊天室 Header：用戶名 + 標籤 + 新增標籤 */}
                         <div style={{ padding: '20px', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ display: 'flex', gap: '15px' }}>
-                                {currentUserInfo && (
-                                    <UserAvatar userId={currentUserInfo.user_id || selectedUser} picUrl={currentUserInfo.pic} size={48} />
+                            <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                                {currentUserInfo?.is_group ? (
+                                    <div style={{
+                                        width: '48px',
+                                        height: '48px',
+                                        borderRadius: '50%',
+                                        backgroundColor: 'rgba(255, 215, 0, 0.2)',
+                                        border: '1px solid var(--primary-yellow)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        flexShrink: 0
+                                    }}>
+                                        <Users size={24} color="var(--primary-yellow)" />
+                                    </div>
+                                ) : (
+                                    currentUserInfo && (
+                                        <UserAvatar userId={currentUserInfo.user_id || selectedUser} picUrl={currentUserInfo.pic} size={48} />
+                                    )
                                 )}
                                 <div>
-                                    <h3 style={{ fontSize: '18px', marginBottom: '5px', marginTop: 0 }}>{currentUserInfo?.name || selectedUser}</h3>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
-                                    {getCurrentUserTags(currentUserInfo).map((t, i) => (
-                                        <span key={i} style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '5px',
-                                            backgroundColor: '#333',
-                                            color: '#FFD700',
-                                            padding: '4px 10px',
-                                            borderRadius: '20px',
-                                            fontSize: '12px',
-                                            border: '1px solid rgba(255, 215, 0, 0.3)'
-                                        }}>
-                                            {t}
-                                            <button
-                                                onClick={() => handleDeleteTag(t)}
-                                                disabled={pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)}
-                                                title={pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000) ? "刪除中" : "刪除標籤"}
-                                                style={{ 
-                                                    background: 'none', 
-                                                    border: 'none', 
-                                                    color: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? '#666' : '#ff4d4f', 
-                                                    padding: '0', 
-                                                    minWidth: 'auto',
-                                                    cursor: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? 'not-allowed' : 'pointer', 
-                                                    fontSize: '14px', 
-                                                    display: 'flex', 
-                                                    alignItems: 'center', 
-                                                    opacity: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? 0.5 : 1 
-                                                }}
-                                            >×</button>
-                                        </span>
-                                    ))}
-                                </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <h3 style={{ fontSize: '18px', margin: 0 }}>{currentUserInfo?.name || selectedUser}</h3>
+                                        {currentUserInfo?.is_group && (
+                                            <span style={{ fontSize: '11px', backgroundColor: 'var(--primary-yellow)', color: '#000', padding: '2px 7px', borderRadius: '4px', fontWeight: 'bold' }}>
+                                                群組
+                                            </span>
+                                        )}
+                                        {currentUserInfo?.is_left && (
+                                            <span style={{ fontSize: '11px', backgroundColor: '#555', color: '#ff7875', padding: '2px 7px', borderRadius: '4px', fontWeight: 'bold' }}>
+                                                已退群
+                                            </span>
+                                        )}
+                                    </div>
+                                    {!currentUserInfo?.is_group ? (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
+                                            {getCurrentUserTags(currentUserInfo).map((t, i) => (
+                                                <span key={i} style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '5px',
+                                                    backgroundColor: '#333',
+                                                    color: '#FFD700',
+                                                    padding: '4px 10px',
+                                                    borderRadius: '20px',
+                                                    fontSize: '12px',
+                                                    border: '1px solid rgba(255, 215, 0, 0.3)'
+                                                }}>
+                                                    {t}
+                                                    <button
+                                                        onClick={() => handleDeleteTag(t)}
+                                                        disabled={pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)}
+                                                        title={pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000) ? "刪除中" : "刪除標籤"}
+                                                        style={{ 
+                                                            background: 'none', 
+                                                            border: 'none', 
+                                                            color: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? '#666' : '#ff4d4f', 
+                                                            padding: '0', 
+                                                            minWidth: 'auto',
+                                                            cursor: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? 'not-allowed' : 'pointer', 
+                                                            fontSize: '14px', 
+                                                            display: 'flex', 
+                                                            alignItems: 'center', 
+                                                            opacity: (pendingTagDeletionsRef.current[selectedUser]?.[t] && (Date.now() - pendingTagDeletionsRef.current[selectedUser][t] < 10000)) ? 0.5 : 1 
+                                                        }}
+                                                    >×</button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#888' }}>
+                                            群組聊天室（全體成員對話共覽）
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                             <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
                                 <div style={{ width: '250px' }}>
                                     <TagInput
-                                        tags={tagInput}
+                                        tags={currentUserInfo?.is_group ? [] : tagInput}
                                         onChange={setTagInput}
-                                        placeholder="選擇或輸入標籤後按 Enter"
+                                        disabled={currentUserInfo?.is_group}
+                                        placeholder={currentUserInfo?.is_group ? "群組模式不支援標籤" : "選擇或輸入標籤後按 Enter"}
                                     />
                                 </div>
                                 <button
                                     onClick={handleAddTag}
-                                    disabled={!tagInput || tagInput.length === 0}
-                                    style={{ padding: '6px 15px', height: '36px', fontSize: '12px', backgroundColor: 'var(--primary-yellow)', color: 'black', borderRadius: '4px', cursor: (!tagInput || tagInput.length === 0) ? 'not-allowed' : 'pointer' }}
+                                    disabled={currentUserInfo?.is_group || !tagInput || tagInput.length === 0}
+                                    title={currentUserInfo?.is_group ? "群組模式不支援新增標籤" : "新增標籤"}
+                                    style={{
+                                        padding: '6px 15px',
+                                        height: '36px',
+                                        fontSize: '12px',
+                                        backgroundColor: currentUserInfo?.is_group ? '#333' : 'var(--primary-yellow)',
+                                        color: currentUserInfo?.is_group ? '#666' : 'black',
+                                        borderRadius: '4px',
+                                        cursor: (currentUserInfo?.is_group || !tagInput || tagInput.length === 0) ? 'not-allowed' : 'pointer',
+                                        border: 'none',
+                                        opacity: currentUserInfo?.is_group ? 0.6 : 1
+                                    }}
                                 >
                                     新增
                                 </button>
@@ -1630,6 +1757,14 @@ function MessageCenter() {
                                                 color: isAdmin ? 'black' : 'white',
                                                 wordBreak: 'break-word',
                                             }}>
+                                                {currentUserInfo?.is_group && !isAdmin && (
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                                                        <UserAvatar userId={m.user_id} picUrl={m.sender_pic} size={20} />
+                                                        <span style={{ fontSize: '11px', color: '#bbb', fontWeight: '500' }}>
+                                                            {m.sender_name || (m.user_id ? `成員(${m.user_id.slice(-4)})` : '群組成員')}
+                                                        </span>
+                                                    </div>
+                                                )}
                                                 <div style={{ fontSize: '14px' }}>
                                                     {renderMessageContent()}
                                                 </div>
@@ -1672,7 +1807,11 @@ function MessageCenter() {
                         )}
 
                         {/* 訊息輸入框 */}
-                        {currentUserInfo?.is_following === false ? (
+                        {currentUserInfo?.is_left ? (
+                            <div style={{ padding: '20px', borderTop: '1px solid #333', textAlign: 'center', color: '#ff4d4f', backgroundColor: 'rgba(255, 77, 79, 0.1)', fontWeight: 'bold' }}>
+                                已退出該群組，無法發送訊息
+                            </div>
+                        ) : currentUserInfo?.is_following === false ? (
                             <div style={{ padding: '20px', borderTop: '1px solid #333', textAlign: 'center', color: '#ff4d4f', backgroundColor: 'rgba(255, 77, 79, 0.1)' }}>
                                 目前用戶已封鎖
                             </div>

@@ -83,6 +83,24 @@ const emptyQuestion = () => ({
 
 const LIFF_ENTRY_URL = 'https://liff.line.me/2009851813-eNpc9OUb';
 
+const roundToNearest5Minutes = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+
+  const ms = 1000 * 60 * 5; // 5 分鐘
+  const rounded = new Date(Math.round(d.getTime() / ms) * ms);
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const year = rounded.getFullYear();
+  const month = pad(rounded.getMonth() + 1);
+  const day = pad(rounded.getDate());
+  const hours = pad(rounded.getHours());
+  const minutes = pad(rounded.getMinutes());
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 export default function Questionnaire() {
   const { oaId } = useParams();
   const { myOAs } = useAuth();
@@ -234,8 +252,8 @@ export default function Questionnaire() {
         title: detail.title || '',
         description: detail.description || '',
         status: detail.status || 'published',
-        startTime: detail.start_time ? detail.start_time.replace(' ', 'T') : '',
-        endTime: detail.end_time ? detail.end_time.replace(' ', 'T') : '',
+        startTime: detail.start_time ? roundToNearest5Minutes(detail.start_time.replace(' ', 'T')) : '',
+        endTime: detail.end_time ? roundToNearest5Minutes(detail.end_time.replace(' ', 'T')) : '',
         finishMessage: detail.finish_message || '感謝你的填寫',
         themeColor: detail.theme_color || '#F8FAFC',
         bgImage: detail.bg_image || '',
@@ -293,6 +311,13 @@ export default function Questionnaire() {
       return;
     }
 
+    const normalizedStartTime = roundToNearest5Minutes(form.startTime);
+    const normalizedEndTime = roundToNearest5Minutes(form.endTime);
+    if (normalizedStartTime && normalizedEndTime && new Date(normalizedEndTime) <= new Date(normalizedStartTime)) {
+      showToast('結束時間必須晚於開始時間', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
       showToast(editingSurveyKey ? '正在儲存修改...' : '正在建立問卷...', 'info');
@@ -301,8 +326,8 @@ export default function Questionnaire() {
         description: form.description,
         status: form.status,
         bot_app_name: botAppName,
-        start_time: form.startTime,
-        end_time: form.endTime,
+        start_time: normalizedStartTime,
+        end_time: normalizedEndTime,
         finish_message: form.finishMessage,
         theme_color: form.themeColor,
         bg_image: form.bgImage,
@@ -452,8 +477,28 @@ export default function Questionnaire() {
 
 
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 2 }}>
-            <TextField size="small" type="datetime-local" label="開始時間" InputLabelProps={{ shrink: true }} value={form.startTime} onChange={e => setForm({ ...form, startTime: e.target.value })} sx={fieldSx} />
-            <TextField size="small" type="datetime-local" label="結束時間" InputLabelProps={{ shrink: true }} value={form.endTime} onChange={e => setForm({ ...form, endTime: e.target.value })} sx={fieldSx} />
+            <TextField
+              size="small"
+              type="datetime-local"
+              label="開始時間"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 300 }}
+              value={form.startTime}
+              onChange={e => setForm({ ...form, startTime: e.target.value })}
+              onBlur={() => setForm(prev => ({ ...prev, startTime: roundToNearest5Minutes(prev.startTime) }))}
+              sx={fieldSx}
+            />
+            <TextField
+              size="small"
+              type="datetime-local"
+              label="結束時間"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 300 }}
+              value={form.endTime}
+              onChange={e => setForm({ ...form, endTime: e.target.value })}
+              onBlur={() => setForm(prev => ({ ...prev, endTime: roundToNearest5Minutes(prev.endTime) }))}
+              sx={fieldSx}
+            />
           </Box>
 
           <TextField fullWidth size="small" label="完成訊息" value={form.finishMessage} onChange={e => setForm({ ...form, finishMessage: e.target.value })} sx={{ ...fieldSx, mb: 2 }} />

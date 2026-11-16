@@ -158,6 +158,22 @@ def _ensure_tables(conn, app_id):
     cur.close()
 
 
+def _align_to_5_minutes(dt):
+    """將 datetime 的分鐘校準至最接近的 5 分鐘倍數，並將秒與微秒歸零。"""
+    if not dt:
+        return None
+    from datetime import timedelta
+    discard = timedelta(
+        minutes=dt.minute % 5,
+        seconds=dt.second,
+        microseconds=dt.microsecond
+    )
+    dt_floor = dt - discard
+    if (dt - dt_floor).total_seconds() >= 150:
+        return dt_floor + timedelta(minutes=5)
+    return dt_floor
+
+
 def _parse_time(value):
     if not value:
         return None
@@ -168,7 +184,8 @@ def _parse_time(value):
             from datetime import datetime
             expected_len = len(datetime.now().strftime(fmt))
             if len(clean) >= expected_len:
-                return datetime.strptime(clean[:expected_len], fmt)
+                dt = datetime.strptime(clean[:expected_len], fmt)
+                return _align_to_5_minutes(dt)
         except ValueError:
             continue
     return None
@@ -591,6 +608,11 @@ def create_survey():
     if not questions:
         return jsonify({"error": "至少需要一題"}), 400
 
+    start_time_val = _parse_time(data.get("start_time"))
+    end_time_val = _parse_time(data.get("end_time"))
+    if start_time_val and end_time_val and end_time_val <= start_time_val:
+        return jsonify({"error": "結束時間必須晚於開始時間"}), 400
+
     conn = None
     try:
         _set_oa_context_from_request()
@@ -619,8 +641,8 @@ def create_survey():
                 str(data.get("finish_menu") or "").strip(),
                 str(data.get("target_group_id") or "").strip(),
                 data.get("bot_app_name") or app_id,
-                _parse_time(data.get("start_time")),
-                _parse_time(data.get("end_time")),
+                start_time_val,
+                end_time_val,
                 bool(data.get("allow_multiple", True)),
                 data.get("finish_message") or "感謝你的填寫",
                 data.get("theme_color") or "#FFD700",
@@ -726,6 +748,11 @@ def update_survey(survey_key):
     if not questions:
         return jsonify({"error": "至少需要一題"}), 400
 
+    start_time_val = _parse_time(data.get("start_time"))
+    end_time_val = _parse_time(data.get("end_time"))
+    if start_time_val and end_time_val and end_time_val <= start_time_val:
+        return jsonify({"error": "結束時間必須晚於開始時間"}), 400
+
     conn = None
     try:
         _set_oa_context_from_request()
@@ -770,8 +797,8 @@ def update_survey(survey_key):
                 str(data.get("finish_journey") or "").strip(),
                 str(data.get("finish_menu") or "").strip(),
                 str(data.get("target_group_id") or "").strip(),
-                _parse_time(data.get("start_time")),
-                _parse_time(data.get("end_time")),
+                start_time_val,
+                end_time_val,
                 bool(data.get("allow_multiple", True)),
                 data.get("finish_message") or "感謝你的填寫",
                 data.get("theme_color") or "#FFD700",
