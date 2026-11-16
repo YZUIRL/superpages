@@ -763,3 +763,15 @@
   - `frontend/src/pages/RuleDesigner.jsx` 新增 `window.onbeforeunload` 監聽，在編輯中或開啟彈窗時阻止誤觸 F5、重新整理或關閉視窗造成草稿遺失。
 - **網路異常與斷線全域處理**：
   - `frontend/src/api.js` 新增網路斷線與 502/503 伺服器異常事件派發，提升系統在極端網路狀況下的健壯性。
+
+## [2026-11-16] - LIFF 問卷排程時間步進 (5 分鐘) 與前後端時間正規化
+### Added & Improved
+- **前端時間選擇器 5 分鐘步進與容錯校準 (`frontend/src/pages/LiffQuestionnaire.jsx`)**：
+  - 「開始時間」與「結束時間」的 MUI `TextField`（`type="datetime-local"`）加入 `inputProps={{ step: 300 }}`，限制瀏覽器原生選擇器分鐘欄位僅呈現以 5 分鐘為間隔之選項（`00, 05, 10, 15, ..., 55`）。
+  - 新增 `roundToNearest5Minutes` 輔助函式：
+    - 當使用者以鍵盤直接手動輸入非 5 倍數分鐘時，於 `onBlur` 失焦時自動執行四捨五入對齊至最近的 5 分鐘倍數。
+    - 載入歷史問卷（`handleEditSurvey`）時自動對齊分鐘，消除原生 HTML5 表單驗證因歷史非 5 倍數時間引發之 `stepMismatch` 阻擋問題。
+    - 在表單送出（`handleSubmit`）時進行防呆檢驗，確保「結束時間必須晚於開始時間」，並正規化送出之 `start_time` 與 `end_time`。
+- **後端時間防禦性正規化與檢核 (`backend/endpoints/liff_questionnaire.py`)**：
+  - 新增 `_align_to_5_minutes` 函式，在 `_parse_time` 解析 datetime 物件時，自動四捨五入對齊至最接近之 5 分鐘倍數，並將秒數與微秒歸零。
+  - 在 `create_survey`（POST）與 `update_survey`（PUT）端點中，加入「結束時間必須晚於開始時間」防呆驗證，若不符則回傳 400 Bad Request，確保入庫資料之正確性與嚴謹度。

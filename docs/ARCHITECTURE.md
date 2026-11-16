@@ -573,3 +573,14 @@ ORDER BY h.timestamp ASC;
   - 此機制消除了 Python 字串比對時 `"['aaa']" != 'aaa'` 造成的 `dict.fromkeys` 去重失效問題，確保資料庫儲存的標籤列表永遠只有乾淨的純文字標籤（如 `['aaa', 'bbb']`），且能在用戶下一次新增標籤時自動淨化該用戶之歷史髒資料。
 
 
+
+### 6. LIFF 問卷排程時間欄位校準機制與無縫更新架構 (2026-11-16)
+- **原生時間選擇器 5 分鐘步進與 HTML5 相容規範**：
+  - 前端採用 HTML5 標準的 `<input type="datetime-local" step="300">` 封裝於 MUI `TextField`。
+  - 設定 `step: 300`（300 秒 = 5 分鐘）使 WebKit / Blink 等標準瀏覽器原生 Picker 在展開分針或分鐘下拉選單時，嚴格以 5 分鐘為間距刻度呈現（`00, 05, 10, 15, ..., 55`），減少管理員微調誤觸率。
+- **雙端四捨五入正規化 (Normalization) 與跨日時鐘邊界容錯**：
+  - **前端護欄 (`roundToNearest5Minutes`)**：針對手動鍵入（鍵盤繞過 Picker）情境，於 `onBlur` 失焦時利用時間戳記四捨五入至最近的 5 分鐘倍數（例如 `14:12` ➔ `14:10`，`14:13` ➔ `14:15`，`23:58` ➔ 隔日 `00:00`），並在既有問卷載入時預先校正，防止歷史非 5 倍數時間造成瀏覽器原生 `stepMismatch` 阻擋表單提交。
+  - **後端防禦 (`_align_to_5_minutes`)**：在 `backend/endpoints/liff_questionnaire.py` 的 `_parse_time` 解析層加入時間對齊運算，確保任何由 API 寫入之開始與結束時間秒數與微秒必為 00，分鐘必為 5 之倍數。
+- **時序邏輯檢核與無縫熱更新 (Zero-Downtime Hot-Reload)**：
+  - 前後端均設有時序檢驗（`end_time > start_time`），避免設定邏輯矛盾。
+  - 問卷填答 API 維持無狀態設計（Stateless），排程判定採用標準 PostgreSQL `TIMESTAMP` 比較（`start_time <= now_tw <= end_time`），發布熱更新過程完全不中斷既有問卷填答之用戶。
