@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'lucide-react';
+import { User, Users } from 'lucide-react';
 import api from '../api';
 
-const UserAvatar = ({ userId, picUrl, size = 40, style = {} }) => {
+const UserAvatar = ({ userId, picUrl, isGroup = false, groupId = null, size = 40, style = {} }) => {
     const [imgSrc, setImgSrc] = useState(picUrl);
     const [status, setStatus] = useState(picUrl ? 'loading' : 'failed');
 
@@ -23,13 +23,25 @@ const UserAvatar = ({ userId, picUrl, size = 40, style = {} }) => {
         setStatus('refreshing');
         setImgSrc(null);
 
-        if (!userId) {
+        const targetId = isGroup ? (groupId || userId) : userId;
+        if (!targetId) {
             setStatus('failed');
             return;
         }
 
         try {
-            const res = await api.post(`/customers/${userId}/refresh-profile`);
+            let res;
+            if (isGroup) {
+                // 群組頭像破圖：向群組專用刷新端點請求摘要與頭像
+                res = await api.post(`/customers/group/${encodeURIComponent(targetId)}/refresh-summary`);
+            } else if (groupId) {
+                // 群組成員頭像破圖：向支援 group_id 的端點請求成員頭貼
+                res = await api.post(`/customers/${encodeURIComponent(targetId)}/refresh-profile?group_id=${encodeURIComponent(groupId)}`);
+            } else {
+                // 個人私聊頭像破圖：維持一般 profile 刷新
+                res = await api.post(`/customers/${encodeURIComponent(targetId)}/refresh-profile`);
+            }
+
             const newUrl = res.data?.picture_url;
             if (newUrl) {
                 setImgSrc(newUrl);
@@ -38,16 +50,20 @@ const UserAvatar = ({ userId, picUrl, size = 40, style = {} }) => {
                 setStatus('failed');
             }
         } catch (err) {
-            console.error('Failed to refresh profile picture:', err);
+            console.error('Failed to refresh avatar picture:', err);
             setStatus('failed');
         }
     };
+
+    const isGroupPlaceholder = isGroup && status !== 'loaded';
 
     const containerStyle = {
         width: `${size}px`,
         height: `${size}px`,
         borderRadius: '50%',
-        backgroundColor: '#444',
+        backgroundColor: isGroupPlaceholder ? 'rgba(255, 215, 0, 0.2)' : '#444',
+        border: isGroupPlaceholder ? '1px solid var(--primary-yellow)' : 'none',
+        boxSizing: 'border-box',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -62,7 +78,11 @@ const UserAvatar = ({ userId, picUrl, size = 40, style = {} }) => {
     return (
         <div style={containerStyle}>
             {showPlaceholder && (
-                <User size={size * 0.6} color="#aaa" />
+                isGroup ? (
+                    <Users size={size * 0.55} color="var(--primary-yellow)" />
+                ) : (
+                    <User size={size * 0.6} color="#aaa" />
+                )
             )}
             {imgSrc && (status === 'loading' || status === 'loading_refreshed' || status === 'loaded') && (
                 <img

@@ -2276,6 +2276,12 @@ def get_user_history(user_id):
                 is_group = True
 
         if is_group:
+            # 異步檢查並同步群組摘要資訊 (名稱與頭貼)，不阻塞當前歷史訊息請求
+            if user_id.startswith('C'):
+                import threading
+                from endpoints.customers import sync_group_summary_info
+                threading.Thread(target=sync_group_summary_info, args=(app_id, user_id, False), daemon=True).start()
+
             # 群組歷史訊息：使用 LEFT JOIN LATERAL 關聯發話成員的姓名與頭像，徹底杜絕 N+1 查詢
             lateral_join = f"""
                 LEFT JOIN LATERAL (
@@ -2636,11 +2642,19 @@ def get_users_list():
                        ELSE (SELECT string_agg(value, '|') FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'tag')
                    END as tags,
                    CASE 
-                       WHEN u.is_group THEN '群組(' || RIGHT(u.group_id, 6) || ')'
+                       WHEN u.is_group THEN 
+                           COALESCE(
+                               NULLIF((SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.group_id AND name = 'name' LIMIT 1), ''),
+                               '群組(' || RIGHT(u.group_id, 6) || ')'
+                           )
                        ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'name' LIMIT 1)
                    END as name,
                    CASE 
-                       WHEN u.is_group THEN 'https://cdn-icons-png.flaticon.com/512/166/166258.png'
+                       WHEN u.is_group THEN 
+                           COALESCE(
+                               NULLIF((SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.group_id AND name = 'pic' LIMIT 1), ''),
+                               'https://cdn-icons-png.flaticon.com/512/166/166258.png'
+                           )
                        ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'pic' LIMIT 1)
                    END as pic,
                    CASE 

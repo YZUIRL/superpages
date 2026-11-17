@@ -1016,6 +1016,85 @@ def count_by_tags():
     finally:
         if conn: conn.close()
 
+def sync_group_summary_info(app_id, group_id, force=False):
+    """
+    從 LINE Messaging API 獲取群組摘要 (Group Summary)，包含名稱與頭貼，
+    並持久化寫入 Private_var:{app_id} (name, pic)。
+    僅對 C 開頭的 group_id 呼叫。
+    遇 404 (機器人退群) 或例外時切勿覆蓋現有快取。
+    """
+    if not group_id or not str(group_id).startswith('C') or not app_id:
+        return None
+
+    import requests
+    from endpoints.richmenu import get_line_token
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        pv_table = f'"Private_var:{app_id}"'
+
+        # 檢查是否已存在 name，若非強制更新且已有非預設之真實群組名稱則跳過，防止 Rate Limit
+        if not force:
+            cur.execute(f"SELECT value FROM {pv_table} WHERE user_id = %s AND name = 'name' LIMIT 1", (group_id,))
+            row = cur.fetchone()
+            if row and row[0] and not row[0].startswith('群組('):
+                cur.execute(f"SELECT value FROM {pv_table} WHERE user_id = %s AND name = 'pic' LIMIT 1", (group_id,))
+                pic_row = cur.fetchone()
+                return {
+                    "name": row[0],
+                    "picture_url": pic_row[0] if pic_row else None
+                }
+
+        token = None
+        from flask import has_app_context
+        if has_app_context() and hasattr(g, 'current_oa_config') and g.current_oa_config and g.current_oa_config.other_settings:
+            token = g.current_oa_config.other_settings.get('line_token')
+        if not token:
+            token = get_line_token(app_name=app_id)
+        if not token:
+            print(f"[sync_group_summary_info] LINE token not configured for app_id={app_id}")
+            return None
+
+        headers = {'Authorization': f'Bearer {token}'}
+        resp = requests.get(f'https://api.line.me/v2/bot/group/{group_id}/summary', headers=headers, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            group_name = data.get('groupName')
+            picture_url = data.get('pictureUrl')
+
+            if group_name:
+                cur.execute(f"UPDATE {pv_table} SET value = %s WHERE user_id = %s AND name = 'name'", (group_name, group_id))
+                if cur.rowcount == 0:
+                    cur.execute(f"INSERT INTO {pv_table} (user_id, name, value) VALUES (%s, 'name', %s)", (group_id, group_name))
+
+            if picture_url:
+                cur.execute(f"UPDATE {pv_table} SET value = %s WHERE user_id = %s AND name = 'pic'", (picture_url, group_id))
+                if cur.rowcount == 0:
+                    cur.execute(f"INSERT INTO {pv_table} (user_id, name, value) VALUES (%s, 'pic', %s)", (group_id, picture_url))
+
+            conn.commit()
+            return {
+                "name": group_name,
+                "picture_url": picture_url
+            }
+        elif resp.status_code == 404:
+            print(f"[sync_group_summary_info] Bot not in group {group_id} (404), keeping existing cache.")
+            return None
+        else:
+            print(f"[sync_group_summary_info] Failed to get group summary for {group_id}: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[sync_group_summary_info] Error fetching group summary for {group_id}: {e}")
+        return None
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 @customers_bp.route('/<user_id>/refresh-profile', methods=['POST'])
 @token_required
 def refresh_customer_profile(user_id):
@@ -1023,7 +1102,12 @@ def refresh_customer_profile(user_id):
     from endpoints.richmenu import get_line_token
     
     app_id = get_current_app_id()
-    token = get_line_token()
+    token = None
+    from flask import has_app_context
+    if has_app_context() and hasattr(g, 'current_oa_config') and g.current_oa_config and g.current_oa_config.other_settings:
+        token = g.current_oa_config.other_settings.get('line_token')
+    if not token:
+        token = get_line_token(app_name=app_id)
     if not token:
         return jsonify({"error": "LINE token not configured"}), 500
         
@@ -1031,13 +1115,29 @@ def refresh_customer_profile(user_id):
     conn = None
     cur = None
     try:
-        resp = requests.get(f'https://api.line.me/v2/bot/profile/{user_id}', headers=headers)
+        group_id = request.args.get('group_id')
+        if not group_id and request.is_json:
+            try:
+                group_id = request.json.get('group_id')
+            except Exception:
+                pass
+
+        resp = None
+        # 若為群組情境且為 C 開頭，優先呼叫群組成員專用端點
+        if group_id and str(group_id).startswith('C'):
+            resp = requests.get(f'https://api.line.me/v2/bot/group/{group_id}/member/{user_id}', headers=headers, timeout=5)
+            # 若成員端點 404（可能已退群但仍是好友），嘗試 fallback 一般 Profile API
+            if resp.status_code == 404:
+                resp = requests.get(f'https://api.line.me/v2/bot/profile/{user_id}', headers=headers, timeout=5)
+        else:
+            resp = requests.get(f'https://api.line.me/v2/bot/profile/{user_id}', headers=headers, timeout=5)
+
         if resp.status_code != 200:
             if resp.status_code == 404:
                 return jsonify({
                     "picture_url": None,
                     "display_name": None,
-                    "status": "unfollowed"
+                    "status": "unfollowed_or_left"
                 }), 200
             return jsonify({"error": f"Failed to get LINE profile: {resp.text}"}), resp.status_code
             
@@ -1074,6 +1174,44 @@ def refresh_customer_profile(user_id):
             cur.close()
         if conn:
             conn.close()
+
+@customers_bp.route('/group/<group_id>/refresh-summary', methods=['POST'])
+@token_required
+def refresh_group_summary(group_id):
+    """
+    手動或按需刷新群組摘要資訊 (名稱與頭貼)
+    """
+    app_id = get_current_app_id()
+    if not group_id or not str(group_id).startswith('C'):
+        return jsonify({"error": "Invalid group ID"}), 400
+    
+    result = sync_group_summary_info(app_id, group_id, force=True)
+    if result:
+        return jsonify({
+            "name": result.get("name"),
+            "picture_url": result.get("picture_url"),
+            "status": "active"
+        }), 200
+    else:
+        # Fallback 讀取現有快取
+        conn = None
+        cur = None
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            pv_table = f'"Private_var:{app_id}"'
+            cur.execute(f"SELECT name, value FROM {pv_table} WHERE user_id = %s AND name IN ('name', 'pic')", (group_id,))
+            rows = dict(cur.fetchall())
+            return jsonify({
+                "name": rows.get('name') or f"群組({group_id[-6:]})",
+                "picture_url": rows.get('pic'),
+                "status": "cached_or_left"
+            }), 200
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        finally:
+            if cur: cur.close()
+            if conn: conn.close()
 
 
 @customers_bp.route('/batch-operation', methods=['POST'])

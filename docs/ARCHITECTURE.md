@@ -636,3 +636,31 @@ Superpages 針對每個官方帳號（Official Account / Bot App）定義了標�
   - `liff_questionnaires:bot2` 同步加入 `finish_tags` (jsonb), `finish_journey` (text), `finish_menu` (text), `target_group_id` (text)。
   - `rich_menu_metadata:bot1` 與 `bot2` 同步加入 `group_id` (varchar), `ui_uuid` (varchar)。
 - **安全保障機制**：DDL 執行一律採用 `IF NOT EXISTS`，不複製亦不覆蓋任何既有資料，抽檢驗證確認原有 22 萬筆 history 及各用戶 Private_var 狀態完全未受影響。
+
+---
+## [2026-11-17] 訊息中心群組聊天室完整群組/成員真實資訊與快取優先架構
+
+### 1. 雙層快取與快取優先讀取設計 (Cache-First Read Pattern)
+- **零阻塞檢索架構**：
+  - `GET /api/users` 負責側邊欄個人與群組對話清單的檢索。為避免外部 LINE API 造成請求延遲或連線池枯竭，該端點嚴禁進行任何同步的外部 HTTP 請求。
+  - 在 SQL 投影中採用 `COALESCE(NULLIF((SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.group_id AND name = 'name' LIMIT 1), ''), '群組(' || RIGHT(u.group_id, 6) || ')')` 與頭像 `pic` 的 `COALESCE` 運算，確保已獲取的群組資料優先顯示，未獲取前秒級 fallback 至預設標識，保障列表查詢具備恆定之高效能。
+
+### 2. LINE Group Summary 異步獲取與持久化架構
+- **非同步熱更新機制**：
+  - 封裝 `sync_group_summary_info(app_id, group_id, force=False)`，僅針對 `C` 開頭之有效群組呼叫 LINE Messaging API `GET /v2/bot/group/{groupId}/summary`。
+  - 當用戶點擊群組對話載入歷史紀錄 (`GET /api/history/<group_id>`) 時，若檢測到該群組在 DB 尚未建立完整名稱，透過守護執行緒 (`threading.Thread(daemon=True)`) 在背景異步觸發 Summary 抓取。
+  - 資料回傳後立即持久化寫入 `"Private_var:{app_id}"` 的 `name` 與 `pic`，日後所有列表檢索與 Header 渲染皆能直接命中快取。
+- **退群 404 防呆與狀態保留**：
+  - 若官方帳號已被踢出群組或已退群，LINE API 將回傳 HTTP 404。後端妥善攔截該狀態並記錄日誌，嚴格禁止覆蓋或清空 DB 內現存之歷史快取值。
+
+### 3. 未加好友群組成員專用 Profile 取得架構
+- **專用群組成員端點整合**：
+  - 針對未加官方帳號為好友的群組發言成員，一般 Profile API (`/v2/bot/profile/{userId}`) 會回傳 404。
+  - 後端 `refresh_customer_profile` 擴充支援 `group_id` 參數。當處於群組情境時，改用群組成員專屬端點 `GET /v2/bot/group/{groupId}/member/{userId}` 取得真實名稱與頭貼。
+  - 成員資料寫入 `Private_var` 後，歷史對話已具備的 `LEFT JOIN LATERAL` 樞紐查詢（$O(1)$ 複雜度）將自動在氣泡上方呈現成員真實名稱與頭像。
+
+### 4. 前端防破圖與智能分流元件架構 (`<UserAvatar>`)
+- **無縫 Fallback 與自動修復機制**：
+  - 擴充 `<UserAvatar>` 支援 `isGroup` 與 `groupId` 屬性。
+  - 群組模式（`isGroup: true`）：預設採用黃色底與外框的經典 `<Users>` 圖示，若有自訂圖片則呈現完整大頭貼。當頭貼載入失敗時，觸發 `onError` 自動向 `/customers/group/<group_id>/refresh-summary` 請求最新快取。
+  - 群組成員模式（`groupId: string`）：當成員頭貼載入失敗時，`onError` 自動帶入 `group_id` 向 `/customers/<user_id>/refresh-profile?group_id=<group_id>` 請求成員端點修復，達成自我修復（Self-Healing）之穩健體驗。

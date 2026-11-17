@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [2026-11-17] - 訊息中心群組聊天室完整升級（真實群組/成員名稱與頭像、快取優先、防破圖自動修復）
+### Added & Enhanced (新增與優化)
+- **群組資訊取得與 Private_var 持久化快取 (`backend/endpoints/customers.py`, `backend/app.py`)**：
+  - 新增 `sync_group_summary_info(app_id, group_id, force=False)`：透過 LINE Messaging API `GET /v2/bot/group/{groupId}/summary` 取得真實 `groupName` 與 `pictureUrl`，持久化寫入 `Private_var:{app_id}`（`name` 與 `pic`）。
+  - 新增專屬刷新端點 `POST /api/customers/group/<group_id>/refresh-summary` 支援手動與按需熱刷新。
+  - 在 `get_user_history()` 載入群組對話時，以背景執行緒（Background Thread）異步調用 `sync_group_summary_info`，完全不阻塞查詢回應。
+  - 完善防呆機制：若機器人已退群（LINE 回傳 404）或請求失敗，嚴格保留現有 DB 快取，切勿覆蓋為空。
+- **群組未加好友成員 Profile 專用獲取 (`backend/endpoints/customers.py`)**：
+  - 擴充 `POST /api/customers/<user_id>/refresh-profile` 支援傳入 `group_id`。
+  - 當處於群組情境（`group_id.startswith('C')`）時，改用群組專用成員端點 `GET /v2/bot/group/{groupId}/member/{userId}` 取得暱稱與頭貼，避開一般 Profile API 的 404 限制，持久化至 `Private_var` 後由現有 `LEFT JOIN LATERAL` 自動高效帶出。
+- **後端用戶列表 SQL 移除硬編碼快取優先 (`backend/app.py`)**：
+  - 修改 `get_users_list()` 之 SQL 投影：將原先寫死之 `'群組(' || RIGHT(...) || ')'` 與固定圖片網址，改為優先 `COALESCE` 讀取 `Private_var` 中群組的 `name` 與 `pic`，若無資料才 fallback 至預設字串與網址，保證列表查詢維持毫秒級零阻塞。
+- **前端 `<UserAvatar>` 與訊息中心 UI 升級 (`frontend/src/components/UserAvatar.jsx`, `frontend/src/pages/MessageCenter.jsx`)**：
+  - `<UserAvatar>` 新增 `isGroup` 與 `groupId` props；當為群組時預設呈現經典黃色圓形圖示，有自訂圖片時渲染真實大頭貼；破圖時智能分流呼叫群組 summary 或成員 profile 刷新端點。
+  - 左側列表與 Header 解除強制 SVG 遮蔽，無縫呈現真實群組頭像與「群組」、「已退群」徽章。
+  - 對話氣泡發話成員頭貼傳入 `groupId`，確保未加好友成員頭貼破圖時可自動刷新修復。
+
 ## [2026-11-17] - 5014 資料庫 bot1 / bot2 缺失資料表建立與新版擴充欄位補齊
 ### Added & Enhanced (新增與優化)
 - **補齊 bot2 缺失之群發廣播核心資料表 (`140.138.176.197:5432/5014`)**:

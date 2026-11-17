@@ -1266,23 +1266,13 @@ function MessageCenter() {
                                         </div>
                                     )}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                        {u.is_group ? (
-                                            <div style={{
-                                                width: '34px',
-                                                height: '34px',
-                                                borderRadius: '50%',
-                                                backgroundColor: 'rgba(255, 215, 0, 0.2)',
-                                                border: '1px solid var(--primary-yellow)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                flexShrink: 0
-                                            }}>
-                                                <Users size={18} color="var(--primary-yellow)" />
-                                            </div>
-                                        ) : (
-                                            <UserAvatar userId={u.user_id} picUrl={u.pic} size={34} style={{ flexShrink: 0 }} />
-                                        )}
+                                        <UserAvatar
+                                            userId={u.is_group ? (u.group_id || u.user_id) : u.user_id}
+                                            picUrl={u.pic}
+                                            isGroup={u.is_group}
+                                            size={34}
+                                            style={{ flexShrink: 0 }}
+                                        />
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                 <p style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', margin: 0 }}>
@@ -1336,24 +1326,13 @@ function MessageCenter() {
                         {/* 聊天室 Header：用戶名 + 標籤 + 新增標籤 */}
                         <div style={{ padding: '20px', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                             <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                {currentUserInfo?.is_group ? (
-                                    <div style={{
-                                        width: '48px',
-                                        height: '48px',
-                                        borderRadius: '50%',
-                                        backgroundColor: 'rgba(255, 215, 0, 0.2)',
-                                        border: '1px solid var(--primary-yellow)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        flexShrink: 0
-                                    }}>
-                                        <Users size={24} color="var(--primary-yellow)" />
-                                    </div>
-                                ) : (
-                                    currentUserInfo && (
-                                        <UserAvatar userId={currentUserInfo.user_id || selectedUser} picUrl={currentUserInfo.pic} size={48} />
-                                    )
+                                {currentUserInfo && (
+                                    <UserAvatar
+                                        userId={currentUserInfo.is_group ? (currentUserInfo.group_id || selectedUser) : currentUserInfo.user_id}
+                                        picUrl={currentUserInfo.pic}
+                                        isGroup={currentUserInfo.is_group}
+                                        size={48}
+                                    />
                                 )}
                                 <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1759,7 +1738,12 @@ function MessageCenter() {
                                             }}>
                                                 {currentUserInfo?.is_group && !isAdmin && (
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                                                        <UserAvatar userId={m.user_id} picUrl={m.sender_pic} size={20} />
+                                                        <UserAvatar
+                                                            userId={m.user_id}
+                                                            picUrl={m.sender_pic}
+                                                            groupId={currentUserInfo?.group_id || selectedUser}
+                                                            size={20}
+                                                        />
                                                         <span style={{ fontSize: '11px', color: '#bbb', fontWeight: '500' }}>
                                                             {m.sender_name || (m.user_id ? `成員(${m.user_id.slice(-4)})` : '群組成員')}
                                                         </span>
