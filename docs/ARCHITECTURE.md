@@ -616,3 +616,23 @@ ORDER BY h.timestamp ASC;
 - **介面狀態與離開防呆**：
   - 編輯已發佈選單時標題明確提示「編輯已發佈選單」，隱藏儲存草稿按鈕，主按鈕顯示「更新並發佈至 LINE」。
   - 關閉或返回列表時新增二次確認防呆彈窗，避免使用者誤觸導致編輯內容遺失。
+
+
+---
+## [2026-11-17] 5014 資料庫商案標準 Schema 補齊與多租戶表格對齊架構
+
+### 1. 商案租戶標準規格 (Standard Tenant Schema Specification)
+Superpages 針對每個官方帳號（Official Account / Bot App）定義了標準的 23 張核心業務表格與視圖：
+- **規則與訊息模組**：`AD_bank:{app}`, `Global_var:{app}`, `Private_var:{app}`, `QA_bank:{app}`, `Q_bank:{app}`, `history:{app}`, `ht_view:{app}`
+- **自動旅程模組**：`projects:{app}`, `project_schedules:{app}`, `user_project_status:{app}`, `cron_table:{app}`
+- **圖文選單模組**：`rich_menu_metadata:{app}`
+- **問卷管理模組**：`liff_questionnaires:{app}`, `liff_questionnaire_questions:{app}`, `liff_questionnaire_answers:{app}`, `liff_questionnaire_responses:{app}`, `v_liff_questionnaire_results:{app}`, `question_table:{app}`, `questionnaire_meta:{app}`, `questionnaire_groups:{app}`
+- **群發廣播模組**：`broadcasts:{app}`, `broadcast_recipients:{app}`, `broadcast_line_stats:{app}`
+
+### 2. 補齊歷程與版本對齊
+- **缺失表格補全**：目標資料庫 `140.138.176.197:5432/5014` 原先缺少 `broadcast_line_stats:bot2` 與 `broadcast_recipients:bot2`，已透過原子性 Migration 腳本補齊，表格數提升至 47 張（`bot1` 23 張 + `bot2` 23 張 + `System_var` 1 張）。
+- **新版欄位擴充對齊**：
+  - `broadcasts:bot2` 同步加入 `sent_recipient_count` (int), `statistics_updated_at` (timestamp), `locked_recipients` (jsonb), `request_id` (varchar), `custom_aggregation_unit` (varchar), `audience_mode` (varchar)。
+  - `liff_questionnaires:bot2` 同步加入 `finish_tags` (jsonb), `finish_journey` (text), `finish_menu` (text), `target_group_id` (text)。
+  - `rich_menu_metadata:bot1` 與 `bot2` 同步加入 `group_id` (varchar), `ui_uuid` (varchar)。
+- **安全保障機制**：DDL 執行一律採用 `IF NOT EXISTS`，不複製亦不覆蓋任何既有資料，抽檢驗證確認原有 22 萬筆 history 及各用戶 Private_var 狀態完全未受影響。

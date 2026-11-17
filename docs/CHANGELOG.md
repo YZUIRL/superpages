@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [2026-11-17] - 5014 資料庫 bot1 / bot2 缺失資料表建立與新版擴充欄位補齊
+### Added & Enhanced (新增與優化)
+- **補齊 bot2 缺失之群發廣播核心資料表 (`140.138.176.197:5432/5014`)**:
+  - 建立 `"broadcast_line_stats:bot2"`：包含 `broadcast_id` (PK), `delivered`, `unique_impression`, `unique_click`, `unique_media_played`, `unique_media_played_100_percent`, `fetched_at`。
+  - 建立 `"broadcast_recipients:bot2"` 與對應之序列器 `"broadcast_recipients:bot2_id_seq"`：包含 `id` (PK, Serial), `broadcast_id`, `user_id`, `send_status` (預設 'sent'), `sent_at`。
+  - 補齊後 `bot1` 與 `bot2` 均達到完整的 23 張標準商案規格表格（總數由 45 張增至 47 張）。
+- **補齊商案表格新版擴充欄位**:
+  - `"broadcasts:bot2"`：補齊 6 個新版廣播排程與受眾鎖定欄位（`sent_recipient_count`, `statistics_updated_at`, `locked_recipients`, `request_id`, `custom_aggregation_unit`, `audience_mode`）。
+  - `"liff_questionnaires:bot2"`：補齊 4 個新版問卷旅程跳轉欄位（`finish_tags`, `finish_journey`, `finish_menu`, `target_group_id`）。
+  - `"rich_menu_metadata:bot1"` & `"rich_menu_metadata:bot2"`：補齊 2 個新版圖文選單分群與 UI 識別欄位（`group_id`, `ui_uuid`）。
+- **遷移與驗證腳本**:
+  - 新增 `backend/scripts/migrate_patch_bot1_bot2_schema.py` 採單一 Transaction 交易原子性執行。
+  - 新增 `backend/scripts/verify_bot1_bot2_patch.py` 自動驗證表格結構、約束、序列與現有業務資料完整性。
+
+
 ## [2026-11-16] - 已發佈圖文選單無縫熱更新架構（先建後刪＋非同步用戶遷移＋尺寸防呆）
 ### Added & Enhanced (新增與優化)
 - **圖文選單熱更新後端端點擴充 (ackend/endpoints/richmenu.py)**:
