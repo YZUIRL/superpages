@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## [2026-11-20] - 修正圖文選單刪除 500 錯誤（ImportError 與租戶連線取得）
+### Fixed (修復)
+- **修正 `delete_rich_menu` 內部錯誤匯入 (`backend/endpoints/richmenu.py`)**：
+  - 移除第 426 行函式局部之 `from db_utils import get_tenant_conn` 錯誤匯入，改為直接使用該檔案頂層（第 85 行）已封裝之模組內部 `get_tenant_conn()`。
+  - 解決呼叫 `DELETE /api/richmenu/<richMenuId>` 時拋出 `ImportError: cannot import name 'get_tenant_conn' from 'db_utils'` 導致 500 錯誤之問題。
+- **維持資料庫 UUID 查詢規格**：
+  - 維持直接透過 `rich_menu_id` 查詢 `ui_uuid`，不增設多餘回退機制，確保資料庫約束與相依性檢查正常運作。
+  - 保證後續 `check_and_clear_dependencies` 相依性清除與 LINE 官方 API (`requests.delete`) 刪除流程順暢執行。
+
 ## [2026-11-17] - 訊息中心群組聊天室完整升級（真實群組/成員名稱與頭像、快取優先、防破圖自動修復）
 ### Added & Enhanced (新增與優化)
 - **群組資訊取得與 Private_var 持久化快取 (`backend/endpoints/customers.py`, `backend/app.py`)**：
