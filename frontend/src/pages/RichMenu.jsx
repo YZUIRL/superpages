@@ -275,13 +275,15 @@ function RichMenu() {
             const dy = Math.round((e.clientY - dragState.startY) / scale);
             
             const newBounds = { ...dragState.startBounds };
+            const menuWidth = currentMenu?.size?.width || 2500;
+            const menuHeight = currentMenu?.size?.height || 1686;
             
             if (dragState.type === 'move') {
-                newBounds.x = Math.max(0, Math.min(currentMenu.size.width - newBounds.width, newBounds.x + dx));
-                newBounds.y = Math.max(0, Math.min(currentMenu.size.height - newBounds.height, newBounds.y + dy));
+                newBounds.x = Math.max(0, Math.min(menuWidth - newBounds.width, newBounds.x + dx));
+                newBounds.y = Math.max(0, Math.min(menuHeight - newBounds.height, newBounds.y + dy));
             } else if (dragState.type === 'resize') {
-                newBounds.width = Math.max(50, Math.min(currentMenu.size.width - newBounds.x, newBounds.width + dx));
-                newBounds.height = Math.max(50, Math.min(currentMenu.size.height - newBounds.y, newBounds.height + dy));
+                newBounds.width = Math.max(50, Math.min(menuWidth - newBounds.x, newBounds.width + dx));
+                newBounds.height = Math.max(50, Math.min(menuHeight - newBounds.y, newBounds.height + dy));
             }
             
             setCurrentMenu(prev => {
@@ -395,13 +397,26 @@ function RichMenu() {
                 }
 
                 const loadedGroup = itemsToLoad.map(m => {
-                    const data = typeof m.data === 'string' ? JSON.parse(m.data) : m.data;
+                    let data = {};
+                    try {
+                        data = typeof m.data === 'string' ? JSON.parse(m.data) : (m.data || {});
+                    } catch (e) {
+                        data = {};
+                    }
                     let file = null;
                     if (data.imageBase64) {
                         file = dataURLtoFile(data.imageBase64, 'draft.png');
                     }
+                    const menuSize = data.size && data.size.width && data.size.height 
+                        ? data.size 
+                        : { width: 2500, height: 1686 };
+                    const menuAreas = Array.isArray(data.areas) ? data.areas : [];
+
                     return {
+                        ...emptyMenu,
                         ...data,
+                        size: menuSize,
+                        areas: menuAreas,
                         id: m.id,
                         status: m.status,
                         richMenuId: m.rich_menu_id,
@@ -419,7 +434,7 @@ function RichMenu() {
                         alias_id: m.alias_id || '',
                         ui_uuid: m.ui_uuid || data.ui_uuid,
                         group_id: m.group_id || data.group_id,
-                        originalSize: data.size ? { width: data.size.width, height: data.size.height } : null
+                        originalSize: { width: menuSize.width, height: menuSize.height }
                     };
                 });
 
@@ -1163,7 +1178,7 @@ function RichMenu() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '30px', flex: 1, minHeight: 0 }}>
                     <div className="card" style={{ overflow: 'auto', padding: '40px', backgroundColor: '#000', borderRadius: '12px', display: 'flex', flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', gap: '40px' }}>
                         <div ref={imageContainerRef} style={{
-                            position: 'relative', width: `${currentMenu.size.width * scale}px`, height: `${currentMenu.size.height * scale}px`,
+                            position: 'relative', width: `${((currentMenu?.size?.width) || 2500) * scale}px`, height: `${((currentMenu?.size?.height) || 1686) * scale}px`,
                             backgroundColor: '#222', border: '1px solid #444', backgroundSize: 'cover',
                             backgroundImage: backgroundImage ? `url(${backgroundImage})` : 'none', flexShrink: 0
                         }} onClick={() => setSelectedAreaIndex(null)}>
@@ -1186,7 +1201,7 @@ function RichMenu() {
                                     </label>
                                 </div>
                             )}
-                            {currentMenu.areas.map((area, idx) => {
+                            {(currentMenu?.areas || []).map((area, idx) => {
                                 const { bounds } = area;
                                 return (
                                     <div key={idx} onMouseDown={(e) => handleMouseDown(e, idx, 'move')} style={{
@@ -1472,7 +1487,7 @@ function RichMenu() {
 
                         <div className="card">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                                <h3>區塊設定 ({currentMenu.areas.length})</h3>
+                                <h3>區塊設定 ({(currentMenu?.areas || []).length})</h3>
                                 {!viewOnly && <button onClick={addArea} className="secondary" style={{ padding: '5px 10px' }}><Plus size={16} /></button>}
                             </div>
                             {selectedAreaIndex !== null ? (

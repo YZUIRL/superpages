@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## [2026-11-20] - 修正圖文選單相依性檢查資料庫主鍵與編輯畫面防呆（防崩潰黑屏）
+### Fixed (修復)
+- **修正相依性檢查之自動旅程關聯 SQL (`backend/utils/dependency_checker.py`)**：
+  - 修正第 133 行中 `projects` 資料表關聯主鍵由 `p.id` 改為 `p.project_id`。
+  - 解決刪除圖文選單時因 `UndefinedColumn: column p.id does not exist` 導致 500 內部伺服器錯誤之問題。
+- **前端圖文選單編輯視圖防呆與健全化 (`frontend/src/pages/RichMenu.jsx`)**：
+  - 於 `handleEditMenu` 解析中繼資料時補齊預設值（`size` 預設為 `2500 x 1686`、`areas` 預設為 `[]`），避免載入歷史結構不全選單時拋錯。
+  - 於畫布外框尺寸（`width`/`height`）、區塊列表（`areas.map`）、區塊計數與拖曳計算全面加入安全防呆（如 `(currentMenu?.size?.width || 2500) * scale`），徹底解決點擊編輯後整頁黑屏崩潰問題。
+
 ## [2026-11-20] - 修正圖文選單刪除 500 錯誤（ImportError 與租戶連線取得）
 ### Fixed (修復)
 - **修正 `delete_rich_menu` 內部錯誤匯入 (`backend/endpoints/richmenu.py`)**：

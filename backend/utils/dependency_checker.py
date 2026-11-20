@@ -130,7 +130,7 @@ def check_and_clear_dependencies(item_type, item_id, force, oa_conn, main_conn=N
             # Find any records containing the ID
             if table.startswith('"project_schedules'):
                 t_projects = f'"projects:{app_id}"'
-                query = f"SELECT s.schedule_id, s.message_content, p.project_name FROM {table} s JOIN {t_projects} p ON s.project_id = p.id WHERE {where_clause}"
+                query = f"SELECT s.schedule_id, s.message_content, p.project_name FROM {table} s JOIN {t_projects} p ON s.project_id = p.project_id WHERE {where_clause}"
                 cur.execute(query, tuple(like_params))
             else:
                 query = f"SELECT {pk}, {col}, {name_col} FROM {table} WHERE {where_clause}"
