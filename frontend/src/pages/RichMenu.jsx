@@ -135,6 +135,8 @@ function RichMenu() {
 
     const [applySourcesData, setApplySourcesData] = useState({ total_users: 0, sources: [] });
     const [loadingApplySources, setLoadingApplySources] = useState(false);
+    const [migratingOldMenuIds, setMigratingOldMenuIds] = useState([]);
+    const isMigrating = migratingOldMenuIds.length > 0;
 
     useEffect(() => {
         const rid = currentMenu?.rich_menu_id || currentMenu?.richMenuId || currentMenu?.ui_uuid || currentMenu?.id;
@@ -203,21 +205,74 @@ function RichMenu() {
     }, [oaId]);
 
     useEffect(() => {
-        if (view === 'list') {
+        if (view === 'list' && !isMigrating) {
             fetchData();
         }
     }, [view, oaId, selectedOAId]);
 
-    const fetchData = async () => {
+    useEffect(() => {
+        if (!isMigrating || view !== 'list') return;
+
+        let cancelled = false;
+        const MAX_ATTEMPTS = 20; // 20 次 * 1.5 秒 = 最長等待 30 秒
+        let attempts = 0;
+        let timerId = null;
+
+        const finishMigration = async (timedOut = false) => {
+            if (cancelled) return;
+            await fetchData(true);
+            if (cancelled) return;
+            setMigratingOldMenuIds([]);
+            if (timedOut) {
+                showToast('背景遷移處理時間較長，若仍看到舊選單請稍後重新整理確認', 'warning');
+            } else {
+                showToast('群組選單已成功同步並完成遷移！', 'success');
+            }
+        };
+
+        const pollOnce = async () => {
+            if (cancelled) return;
+            attempts += 1;
+            try {
+                const res = await api.get(getMenusEndpoint(), { _bypassCache: true });
+                if (cancelled) return;
+                const lineMenus = res.data?.richmenus || [];
+                const stillExists = migratingOldMenuIds.some(oldId =>
+                    lineMenus.some(rm => rm.richMenuId === oldId)
+                );
+                if (!stillExists) {
+                    await finishMigration(false);
+                    return;
+                }
+            } catch (err) {
+                console.error('Polling rich menu migration status failed:', err);
+            }
+
+            if (attempts >= MAX_ATTEMPTS) {
+                await finishMigration(true);
+                return;
+            }
+            timerId = setTimeout(pollOnce, 1500);
+        };
+
+        timerId = setTimeout(pollOnce, 1500);
+
+        return () => {
+            cancelled = true;
+            if (timerId) clearTimeout(timerId);
+        };
+    }, [migratingOldMenuIds, view]);
+
+    const fetchData = async (bypassCache = false) => {
         const menusEndpoint = getMenusEndpoint();
-        const hasWarmCache = hasCachedApiResponse(menusEndpoint) && hasCachedApiResponse('/richmenu/metadata');
+        const hasWarmCache = !bypassCache && hasCachedApiResponse(menusEndpoint) && hasCachedApiResponse('/richmenu/metadata');
 
         if (!hasWarmCache) {
             setLoading(true);
         }
 
         try {
-            await Promise.all([fetchMenus(), fetchMetadata()]);
+            await Promise.all([fetchMenus(bypassCache), fetchMetadata(bypassCache)]);
             // 取得標籤與客戶群清單供下拉選單使用
             try {
                 const tagsRes = await api.get('/customers/tags');
@@ -232,18 +287,18 @@ function RichMenu() {
         }
     };
 
-    const fetchMenus = async () => {
+    const fetchMenus = async (bypassCache = false) => {
         try {
-            const res = await api.get(getMenusEndpoint());
+            const res = await api.get(getMenusEndpoint(), bypassCache ? { _bypassCache: true } : undefined);
             setMenus(res.data.richmenus || []);
         } catch (err) {
             console.error('Failed to fetch menus:', err);
         }
     };
 
-    const fetchMetadata = async () => {
+    const fetchMetadata = async (bypassCache = false) => {
         try {
-            const res = await api.get('/richmenu/metadata');
+            const res = await api.get('/richmenu/metadata', bypassCache ? { _bypassCache: true } : undefined);
             setMetadata(res.data || []);
         } catch (err) {
             console.error('Failed to fetch metadata:', err);
@@ -644,6 +699,7 @@ function RichMenu() {
             const currentOA = myOAs.find(oa => oa.id.toString() === selectedOAId.toString()) || myOAs[0];
             const appName = currentOA?.other_settings?.app_name || '';
             const liffId = "2009851813-AgTeSa4r";
+            const replacedOldMenuIds = [];
 
             for (let i = 0; i < currentGroup.length; i++) {
                 const menu = currentGroup[i];
@@ -732,6 +788,9 @@ function RichMenu() {
                     }
                 };
                 await api.post('/richmenu/metadata', payload);
+                if (oldRichMenuId && oldRichMenuId !== richMenuId) {
+                    replacedOldMenuIds.push(oldRichMenuId);
+                }
 
                 // Set default via LINE API if strategy is default
                 if (menu.publishStrategy === 'default') {
@@ -757,7 +816,11 @@ function RichMenu() {
                 }
             }
             
-            showToast('群組選單已成功同步至 LINE！', 'success');
+            if (replacedOldMenuIds.length > 0) {
+                setMigratingOldMenuIds(replacedOldMenuIds);
+            } else {
+                showToast('群組選單已成功同步至 LINE！', 'success');
+            }
             setCurrentGroup([]);
             setView('list');
         } catch (err) {
@@ -1701,13 +1764,16 @@ function RichMenu() {
             </div>
 
             <div style={{ position: 'relative', minHeight: '300px' }}>
-                {loading && (
+                {isMigrating && (
+                    <LoadingSpinner fullScreen={true} message="正在遷移圖文選單設定並清理舊選單，請稍候..." />
+                )}
+                {!isMigrating && loading && (
                     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '100px' }}>
                         <LoadingSpinner />
                     </div>
                 )}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '40px', opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-                    {Object.entries(groupedMenus).map(([oaName, oaMenus]) => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '40px', opacity: loading ? 0.5 : 1, pointerEvents: loading || isMigrating ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
+                    {!isMigrating && Object.entries(groupedMenus).map(([oaName, oaMenus]) => (
                     <div key={oaName}>
                         <h2 style={{ fontSize: '20px', color: 'var(--primary-yellow)', marginBottom: '20px', borderLeft: '4px solid var(--primary-yellow)', paddingLeft: '15px' }}>
                             {oaName} ({oaMenus.length})

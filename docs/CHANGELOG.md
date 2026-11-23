@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [2026-11-23] - 圖文選單熱更新遷移等待圓圈動畫與前端輪詢同步
+### Added & Enhanced (新增與優化)
+- **前端熱更新遷移等待與自動輪詢確認 (`frontend/src/pages/RichMenu.jsx`)**：
+  - 於 `publishGroupToLine` 發佈過程中收集所有被替換的 `oldRichMenuIds`。
+  - 切回選單列表後，若包含舊選單替換，先隱藏尚未清理完成的選單卡片並呈現全螢幕圓圈旋轉動畫遮罩（`<LoadingSpinner fullScreen={true} />`），避免使用者在背景遷移期間誤觸其他按鈕或看到舊選單殘影（`ID: xxxxxxxx`）。
+  - 透過 `useEffect` 每 1.5 秒呼叫 `GET /richmenu/`（帶 `{ _bypassCache: true }` 繞過前端快取），直到確認所有 `oldRichMenuIds` 均已自 LINE 官方清單消失後，自動繞過快取重抓最新列表並結束動畫。
+  - 內建 30 秒逾時保護與元件卸載計時器清理（Cleanup），確保異常情境不卡死、切換頁面不殘留背景輪詢。
+
 ## [2026-11-23] - 修正圖文選單 Metadata 刪除 500 錯誤（補齊 `get_db_connection` 局部匯入）
 ### Fixed (修復)
 - **補齊 `delete_rich_menu_metadata` 之資料庫連線匯入 (`backend/endpoints/richmenu.py`)**：
