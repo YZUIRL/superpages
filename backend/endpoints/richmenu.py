@@ -1207,6 +1207,7 @@ def save_rich_menu_metadata():
 def delete_rich_menu_metadata(id):
     try:
         force = request.args.get('force', 'false').lower() == 'true'
+        from db_utils import get_db_connection
         from utils.dependency_checker import check_and_clear_dependencies
 
         t_metadata = get_t('rich_menu_metadata')

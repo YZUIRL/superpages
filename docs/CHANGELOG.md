@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [2026-11-23] - 修正圖文選單 Metadata 刪除 500 錯誤（補齊 `get_db_connection` 局部匯入）
+### Fixed (修復)
+- **補齊 `delete_rich_menu_metadata` 之資料庫連線匯入 (`backend/endpoints/richmenu.py`)**：
+  - 於 `delete_rich_menu_metadata(id)` 函式內部補齊局部匯入 `from db_utils import get_db_connection`。
+  - 解決刪除納管於資料庫之圖文選單（`DELETE /api/richmenu/metadata/<id>`）時，因未定義 `get_db_connection` 拋出 `NameError` 導致 HTTP 500 錯誤之問題。
+
 ## [2026-11-20] - 修正圖文選單相依性檢查資料庫主鍵與編輯畫面防呆（防崩潰黑屏）
 ### Fixed (修復)
 - **修正相依性檢查之自動旅程關聯 SQL (`backend/utils/dependency_checker.py`)**：

@@ -42,8 +42,8 @@ Superpages 是一個全端 (Full-stack) 網頁應用程式，專門用於管理�
 - **LIFF 標籤追蹤**：支援在「開啟連結」動作中設定標籤，系統會自動生成 LIFF 代理連結 (Proxy URL)，在跳轉前先透過 WebSocket 標記用戶，以利後續客群分析。
 - **多租戶 metadata 資料表與 ui_uuid 整合**：圖文選單的排程中繼資料 (Metadata) 以 `rich_menu_metadata:{appname}` 命名，與系統其他業務表格命名規範一致。存取由 `endpoints/richmenu.py` 的 `get_t()` 函數動態解析。系統統一使用持久的 `ui_uuid` 作為圖文選單之關聯與切換依據（例如在 Flex 訊息按鈕與關鍵字回覆規則中），避免 LINE 端重置選單導致 `richMenuId` 變更而失效。後端 API 會自動在圖文選單列表中動態對照並注入 `ui_uuid`。
 - **雙重刪除通道與相依性保護**：
-  - 提供 `/api/richmenu/metadata/<ui_uuid>`（系統納管元資料之完整選單）與 `/api/richmenu/<richMenuId>`（純 LINE 選單）雙刪除通道。
-  - 均整合 `check_and_clear_dependencies` 檢查相依性（關鍵字回覆、受眾標籤等），並使用模組內部封裝之 `get_tenant_conn()` 確保租戶連線安全切換與清理。相依性查詢嚴格依循租戶資料表關聯主鍵（如 `projects.project_id`），保證關聯校驗無例外中斷。
+  - 提供 `/api/richmenu/metadata/<id>`（系統納管元資料之完整選單）與 `/api/richmenu/<richMenuId>`（純 LINE 選單）雙刪除通道。
+  - 均整合 `check_and_clear_dependencies` 檢查相依性（關鍵字回覆、受眾標籤、自動旅程等），並透過局部匯入 `db_utils.get_db_connection()` 取得 OA 資料庫連線，搭配模組內部封裝之 `get_tenant_conn()` 確保租戶連線安全切換與清理。相依性查詢嚴格依循租戶資料表關聯主鍵（如 `projects.project_id`），保證關聯校驗無例外中斷。
 - **編輯器多選單群組與安全防呆容錯架構**：
   - 前端編輯器（`RichMenu.jsx`）支援多頁籤選單群組編輯，並於載入草稿或歷史已發佈選單時實施雙層防呆注入（對 `size` 與 `areas` 提供標準預設 fallback），確保即使底層中繼資料欄位缺損亦不會導致 React 組件渲染崩潰。
 - **預設選單動態對照機制**：解決資料庫中狀態可能因排程切換或手動取消而與 LINE 伺服器不同步的問題，前端不再單純依賴 metadata 中的 `'default'` 狀態，而是直接將選單 ID 與 LINE 當前實際生效的預設選單 ID 集合進行比對，從而精確顯示「預設」徽章。
