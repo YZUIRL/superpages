@@ -1172,6 +1172,9 @@ function RichMenu() {
                 });
                 if (!result.isConfirmed) return;
             }
+            setCurrentGroup([]);
+            setBackgroundImage(null);
+            setSelectedAreaIndex(null);
             setView('list');
         };
 

@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [2026-11-23] - 修正離開圖文選單編輯後再次進入底圖消失問題
+### Fixed (修復)
+- **離開編輯視圖同步清理狀態 (`frontend/src/pages/RichMenu.jsx`)**：
+  - 於 `handleBackToList` 確認離開返回列表前，同步執行 `setCurrentGroup([])`、`setBackgroundImage(null)` 與 `setSelectedAreaIndex(null)`。
+  - 解決離開已發佈選單編輯畫面後再次進入同一張選單編輯時，因 `currentMenu` 依賴值未變更導致自動載圖 `useEffect` 未觸發、畫布底圖消失變為「請上傳底圖」空白畫面之問題。
+
 ## [2026-11-23] - 圖文選單熱更新遷移等待圓圈動畫與前端輪詢同步
 ### Added & Enhanced (新增與優化)
 - **前端熱更新遷移等待與自動輪詢確認 (`frontend/src/pages/RichMenu.jsx`)**：
