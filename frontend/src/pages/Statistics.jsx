@@ -655,7 +655,7 @@ const Statistics = () => {
                                                 </td>
                                                 <td style={{ padding: '14px 10px' }}>
                                                     <span
-                                                        onClick={() => navigate('/rule-designer')}
+                                                        onClick={() => navigate(`/oa/${oaId}/ruledesigner`)}
                                                         style={{ color: '#2196F3', cursor: 'pointer', textDecoration: 'underline' }}
                                                         title="前往規則設定"
                                                     >
@@ -716,7 +716,7 @@ const Statistics = () => {
                                                 </td>
                                                 <td style={{ padding: '14px 10px', textAlign: 'center' }}>
                                                     <button
-                                                        onClick={() => navigate(`/rule-designer?keyword=${encodeURIComponent(item.unmatched_message)}`)}
+                                                        onClick={() => navigate(`/oa/${oaId}/ruledesigner?keyword=${encodeURIComponent(item.unmatched_message)}`)}
                                                         style={{
                                                             padding: '5px 12px',
                                                             borderRadius: '6px',

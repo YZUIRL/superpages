@@ -678,3 +678,14 @@ Superpages 針對每個官方帳號（Official Account / Bot App）定義了標�
   - `GET /api/users` 列表回傳前僅收集名稱仍為預設 `群組(...)` 且未退群的 `C` 開頭群組，由單一背景執行緒循序呼叫 `sync_missing_groups_batch()`（單次最多 10 個群組，搭配 `(app_id, group_id)` 300 秒記憶體冷卻 TTL），兼顧即時補齊與 LINE API Rate Limit 防護；查無 `pic` 時 SQL 統一回傳 `''` 交由前端 `<UserAvatar>` 呈現黃色群組佔位圖。
 - **前端圖片快取競態防護 (`UserAvatar.jsx`)**：
   - 透過比對 `picUrl !== imgSrc` 避免重複重置 `status`，並以 `imgRef.current.complete && imgRef.current.naturalWidth > 0` 主動辨識瀏覽器記憶體快取已載入完成之圖片，確保頁籤切換重掛載時頭貼零閃爍、不消失。
+
+
+---
+## [2026-11-24] 綜合數據關鍵字排行跳轉與規則設計器參數帶入競態修復
+
+### 1. 多機器人路由對齊 (`frontend/src/pages/Statistics.jsx`)
+- 綜合數據頁面中「未命中訊息排行」的「建立規則」按鈕與「規則命中排行」的規則名稱連結，統一修正為符合多租戶前端路由規格之 `/oa/${oaId}/ruledesigner`（未命中建立規則附加 `?keyword=${encodeURIComponent(item.unmatched_message)}`），確保 React Router 正確匹配且 Axios 攔截器能從網址自動擷取 `X-OA-ID`。
+
+### 2. 非同步載入後注入草稿機制 (`frontend/src/pages/RuleDesigner.jsx`)
+- 採用 `useSearchParams` 結合 `pendingKeywordRef` 暫存外部帶入的 `keyword` 參數，將草稿規則建立時機移至 `fetchRules()` 完成取得既有規則列表 (`loadedDrafts`) 之後，以 `[newRule, ...loadedDrafts]` 一次性合併並展開 `selectedRuleIndex = 0`，徹底消除掛載同步寫入被非同步 API 回傳覆寫的競態條件。
+- 注入完成後透過 `setSearchParams({}, { replace: true })` 清除 URL 查詢參數並歸零 `pendingKeywordRef`，防止儲存後觸發重載或按 F5 重整時重複建立草稿；同步移除自動填入 `searchTerm` 的副作用，確保返回列表時呈現完整規則清單。

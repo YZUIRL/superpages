@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Swal from 'sweetalert2';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import api from '../api';
 import { 
     Plus, Search, Edit2, Trash2, Save, X, Eye, 
@@ -419,6 +419,8 @@ const stringifyFunction = (data, note = '', content = '') => {
 
 function RuleDesigner() {
     const { oaId } = useParams();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const pendingKeywordRef = useRef(null);
     const { showToast } = useToast();
     
     // State
@@ -492,6 +494,16 @@ function RuleDesigner() {
         fetchDropdownData();
     }, [oaId]);
 
+    // 監聽 URL keyword 參數（由綜合數據未命中排行「建立規則」帶入）
+    useEffect(() => {
+        const kwParam = searchParams.get('keyword');
+        if (kwParam && kwParam.trim()) {
+            pendingKeywordRef.current = kwParam.trim();
+            if (designMode !== 'simple') setDesignMode('simple');
+            if (bankType !== 'q_bank') setBankType('q_bank');
+        }
+    }, [searchParams]);
+
     // Initial Load
     useEffect(() => {
         fetchRules();
@@ -503,32 +515,6 @@ function RuleDesigner() {
             setSelectedRuleIndex(null);
         }
     }, [designMode]);
-
-    // Handle URL keyword parameter from Statistics unmatched ranking create rule button
-    useEffect(() => {
-        const queryParams = new URLSearchParams(window.location.search);
-        const kwParam = queryParams.get('keyword');
-        if (kwParam) {
-            setDesignMode('simple');
-            setBankType('q_bank');
-            setSearchTerm(kwParam);
-            const newRule = {
-                state_in: ['*'],
-                type: 'Message',
-                content: [kwParam],
-                check: [''],
-                msg_rpy: [],
-                state_out: '00000',
-                function: '',
-                history: true,
-                note: kwParam,
-                _isDirty: true,
-                _isNew: true
-            };
-            setDraftRules(prev => [newRule, ...prev]);
-            setSelectedRuleIndex(0);
-        }
-    }, []);
 
     const fetchRules = async () => {
         setLoading(true);
@@ -563,7 +549,33 @@ function RuleDesigner() {
             }
 
             setRules(newRules);
-            setDraftRules(JSON.parse(JSON.stringify(newRules)).map(r => ({ ...r, _isDirty: false })));
+            const loadedDrafts = JSON.parse(JSON.stringify(newRules)).map(r => ({ ...r, _isDirty: false }));
+
+            if (designMode === 'simple' && bankType === 'q_bank' && pendingKeywordRef.current) {
+                const kwParam = pendingKeywordRef.current;
+                pendingKeywordRef.current = null;
+
+                const newRule = {
+                    state_in: ['*'],
+                    type: 'Message',
+                    content: [kwParam],
+                    check: [''],
+                    msg_rpy: [],
+                    state_out: '00000',
+                    function: '',
+                    history: true,
+                    note: kwParam,
+                    _isDirty: true,
+                    _isNew: true
+                };
+
+                setDraftRules([newRule, ...loadedDrafts]);
+                setSelectedRuleIndex(0);
+                // 帶入後移除 URL query 參數，避免儲存重新載入或重整頁面時重複建立草稿
+                setSearchParams({}, { replace: true });
+            } else {
+                setDraftRules(loadedDrafts);
+            }
         } catch (err) {
             showToast('載入規則失敗', 'error');
         } finally {

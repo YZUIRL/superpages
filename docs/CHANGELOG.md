@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## [2026-11-24] - 修正綜合數據未命中排行「建立規則」路徑錯誤與參數帶入競態覆寫
+### Fixed (修復)
+- **修正綜合數據跳轉至規則設計器路徑格式 (`frontend/src/pages/Statistics.jsx`)**：
+  - 將「未命中訊息排行」的「建立規則」按鈕導向由 `/rule-designer?keyword=...` 修正為多機器人架構路徑 `/oa/${oaId}/ruledesigner?keyword=...`，解決 React Router 報錯 `No routes matched location` 與主畫面空白問題，並確保 `api.js` 能正確從 URL 擷取 `X-OA-ID`。
+  - 同步修正「規則命中排行」點擊規則名稱的導向路徑為 `/oa/${oaId}/ruledesigner`。
+- **消除規則設計器 URL `keyword` 參數帶入之非同步競態覆寫 (`frontend/src/pages/RuleDesigner.jsx`)**：
+  - 改用 React Router `useSearchParams` 搭配 `pendingKeywordRef` 暫存待帶入之未命中訊息，改於 `fetchRules()` 非同步載入既有規則完成後，再一次性合併 `[newRule, ...loadedDrafts]` 並設定 `setSelectedRuleIndex(0)` 展開編輯視圖，避免草稿被後端回傳列表整包覆寫。
+  - 帶入完成後自動執行 `setSearchParams({}, { replace: true })` 清除網址 `?keyword=...` 參數，防止儲存重新載入或重整頁面時重複建立草稿，並移除多餘的 `setSearchTerm(kwParam)` 以免返回列表時被搜尋條件鎖住。
+
 ## [2026-11-24] - 訊息中心頭貼快取修復與群組資訊背景熱更新修正
 ### Fixed & Improved (修復與優化)
 - **前端頭貼元件快取與狀態機競態修復 (`frontend/src/components/UserAvatar.jsx`)**：
