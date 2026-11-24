@@ -108,7 +108,7 @@ const Statistics = () => {
     const [activeCategory, setActiveCategory] = useState('message');
     const [selectedTags, setSelectedTags] = useState([]);
     const [keywordPage, setKeywordPage] = useState(1);
-    const ITEMS_PER_PAGE = 20;
+    const ITEMS_PER_PAGE = 8;
 
     // 關鍵字排行標籤篩選狀態
     const [keywordTag, setKeywordTag] = useState('');  // '' = 全部

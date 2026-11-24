@@ -689,3 +689,10 @@ Superpages 針對每個官方帳號（Official Account / Bot App）定義了標�
 ### 2. 非同步載入後注入草稿機制 (`frontend/src/pages/RuleDesigner.jsx`)
 - 採用 `useSearchParams` 結合 `pendingKeywordRef` 暫存外部帶入的 `keyword` 參數，將草稿規則建立時機移至 `fetchRules()` 完成取得既有規則列表 (`loadedDrafts`) 之後，以 `[newRule, ...loadedDrafts]` 一次性合併並展開 `selectedRuleIndex = 0`，徹底消除掛載同步寫入被非同步 API 回傳覆寫的競態條件。
 - 注入完成後透過 `setSearchParams({}, { replace: true })` 清除 URL 查詢參數並歸零 `pendingKeywordRef`，防止儲存後觸發重載或按 F5 重整時重複建立草稿；同步移除自動填入 `searchTerm` 的副作用，確保返回列表時呈現完整規則清單。
+
+
+---
+## [2026-11-24] 綜合數據關鍵字排行分頁筆數調整
+
+- **前端分頁顯示密度優化 (`frontend/src/pages/Statistics.jsx`)**：
+  - 將關鍵字統計與排行共用之分頁常數 `ITEMS_PER_PAGE` 由 `20` 調整為 `8`，規則命中排行與未命中訊息排行統一改為每頁呈現 8 筆（超過 8 筆時右上角自動顯示分頁切換器）；後端回傳上限與 CSV 全量報表匯出行為皆維持原規格不變。
