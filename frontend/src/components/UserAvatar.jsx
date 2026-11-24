@@ -1,15 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, Users } from 'lucide-react';
 import api from '../api';
 
 const UserAvatar = ({ userId, picUrl, isGroup = false, groupId = null, size = 40, style = {} }) => {
     const [imgSrc, setImgSrc] = useState(picUrl);
     const [status, setStatus] = useState(picUrl ? 'loading' : 'failed');
+    const imgRef = useRef(null);
 
     useEffect(() => {
-        setImgSrc(picUrl);
-        setStatus(picUrl ? 'loading' : 'failed');
+        if (!picUrl) {
+            setImgSrc(null);
+            setStatus('failed');
+            return;
+        }
+        // 僅在外部傳入的 picUrl 與目前顯示網址確實不同時才重新載入，避免無條件重置已載入狀態
+        if (picUrl !== imgSrc) {
+            setImgSrc(picUrl);
+            setStatus('loading');
+        } else if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+            setStatus('loaded');
+        }
     }, [picUrl]);
+
+    // 檢查瀏覽器記憶體快取：重新掛載或更新 src 時若圖片已完成解碼，直接標記為 loaded
+    useEffect(() => {
+        const img = imgRef.current;
+        if (img && imgSrc && img.complete && img.naturalWidth > 0) {
+            setStatus('loaded');
+        }
+    }, [imgSrc]);
 
     const handleError = async () => {
         // If we already refreshed or failed, or if we are currently loading the refreshed image, stop.
@@ -86,6 +105,7 @@ const UserAvatar = ({ userId, picUrl, isGroup = false, groupId = null, size = 40
             )}
             {imgSrc && (status === 'loading' || status === 'loading_refreshed' || status === 'loaded') && (
                 <img
+                    ref={imgRef}
                     src={imgSrc}
                     alt="avatar"
                     style={{

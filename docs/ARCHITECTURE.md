@@ -671,3 +671,10 @@ Superpages 針對每個官方帳號（Official Account / Bot App）定義了標�
   - 擴充 `<UserAvatar>` 支援 `isGroup` 與 `groupId` 屬性。
   - 群組模式（`isGroup: true`）：預設採用黃色底與外框的經典 `<Users>` 圖示，若有自訂圖片則呈現完整大頭貼。當頭貼載入失敗時，觸發 `onError` 自動向 `/customers/group/<group_id>/refresh-summary` 請求最新快取。
   - 群組成員模式（`groupId: string`）：當成員頭貼載入失敗時，`onError` 自動帶入 `group_id` 向 `/customers/<user_id>/refresh-profile?group_id=<group_id>` 請求成員端點修復，達成自我修復（Self-Healing）之穩健體驗。
+
+### 5. 背景執行緒租戶隔離與前端快取狀態機補強 (2026-11-24)
+- **背景任務跨租戶連線安全模型**：
+  - 凡由 Flask Request Handler 派發至 `threading.Thread` 之背景任務，必須於主執行緒預先擷取 `g.current_db_url` 與 `line_token` 並透過參數顯式傳遞；`db_utils.get_db_connection()` 內部存取 `g` 全面加上 `has_app_context()` 保護，確保無 App Context 時絕不拋出 `RuntimeError` 或誤連預設主庫。
+  - `GET /api/users` 列表回傳前僅收集名稱仍為預設 `群組(...)` 且未退群的 `C` 開頭群組，由單一背景執行緒循序呼叫 `sync_missing_groups_batch()`（單次最多 10 個群組，搭配 `(app_id, group_id)` 300 秒記憶體冷卻 TTL），兼顧即時補齊與 LINE API Rate Limit 防護；查無 `pic` 時 SQL 統一回傳 `''` 交由前端 `<UserAvatar>` 呈現黃色群組佔位圖。
+- **前端圖片快取競態防護 (`UserAvatar.jsx`)**：
+  - 透過比對 `picUrl !== imgSrc` 避免重複重置 `status`，並以 `imgRef.current.complete && imgRef.current.naturalWidth > 0` 主動辨識瀏覽器記憶體快取已載入完成之圖片，確保頁籤切換重掛載時頭貼零閃爍、不消失。

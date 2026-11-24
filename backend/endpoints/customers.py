@@ -1016,7 +1016,11 @@ def count_by_tags():
     finally:
         if conn: conn.close()
 
-def sync_group_summary_info(app_id, group_id, force=False):
+_group_summary_sync_cooldown = {}
+_GROUP_SUMMARY_COOLDOWN_TTL = 300  # 5 分鐘冷卻時間，避免重複呼叫 LINE API
+
+
+def sync_group_summary_info(app_id, group_id, force=False, db_url=None, token=None):
     """
     從 LINE Messaging API 獲取群組摘要 (Group Summary)，包含名稱與頭貼，
     並持久化寫入 Private_var:{app_id} (name, pic)。
@@ -1026,13 +1030,33 @@ def sync_group_summary_info(app_id, group_id, force=False):
     if not group_id or not str(group_id).startswith('C') or not app_id:
         return None
 
+    import time
     import requests
-    from endpoints.richmenu import get_line_token
+    from flask import has_app_context
+    from endpoints.richmenu import get_line_token, get_tenant_db_url
+
+    cache_key = (str(app_id), str(group_id))
+    now_ts = time.time()
+    if not force:
+        last_ts = _group_summary_sync_cooldown.get(cache_key, 0)
+        if now_ts - last_ts < _GROUP_SUMMARY_COOLDOWN_TTL:
+            return None
+        _group_summary_sync_cooldown[cache_key] = now_ts
+
+    # 確保背景執行緒連到正確的租戶資料庫
+    target_db_url = db_url
+    if not target_db_url and has_app_context():
+        target_db_url = getattr(g, 'current_db_url', None)
+    if not target_db_url:
+        target_db_url = get_tenant_db_url(app_name=app_id)
+    if not target_db_url:
+        print(f"[sync_group_summary_info] Cannot resolve tenant db_url for app_id={app_id}, aborting.")
+        return None
 
     conn = None
     cur = None
     try:
-        conn = get_db_connection()
+        conn = get_db_connection(target_db_url)
         cur = conn.cursor()
         pv_table = f'"Private_var:{app_id}"'
 
@@ -1048,17 +1072,16 @@ def sync_group_summary_info(app_id, group_id, force=False):
                     "picture_url": pic_row[0] if pic_row else None
                 }
 
-        token = None
-        from flask import has_app_context
-        if has_app_context() and hasattr(g, 'current_oa_config') and g.current_oa_config and g.current_oa_config.other_settings:
-            token = g.current_oa_config.other_settings.get('line_token')
-        if not token:
-            token = get_line_token(app_name=app_id)
-        if not token:
+        resolved_token = token
+        if not resolved_token and has_app_context() and hasattr(g, 'current_oa_config') and g.current_oa_config and g.current_oa_config.other_settings:
+            resolved_token = g.current_oa_config.other_settings.get('line_token')
+        if not resolved_token:
+            resolved_token = get_line_token(app_name=app_id)
+        if not resolved_token:
             print(f"[sync_group_summary_info] LINE token not configured for app_id={app_id}")
             return None
 
-        headers = {'Authorization': f'Bearer {token}'}
+        headers = {'Authorization': f'Bearer {resolved_token}'}
         resp = requests.get(f'https://api.line.me/v2/bot/group/{group_id}/summary', headers=headers, timeout=4)
         if resp.status_code == 200:
             data = resp.json()
@@ -1094,6 +1117,14 @@ def sync_group_summary_info(app_id, group_id, force=False):
             cur.close()
         if conn:
             conn.close()
+
+
+def sync_missing_groups_batch(app_id, group_ids, db_url=None, token=None):
+    """
+    在單一背景執行緒中循序補齊多個缺失名稱的群組摘要（單次最多 10 個），避免佔用過多連線池。
+    """
+    for gid in (group_ids or [])[:10]:
+        sync_group_summary_info(app_id, gid, force=False, db_url=db_url, token=token)
 
 @customers_bp.route('/<user_id>/refresh-profile', methods=['POST'])
 @token_required

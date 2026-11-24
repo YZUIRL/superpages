@@ -2276,11 +2276,18 @@ def get_user_history(user_id):
                 is_group = True
 
         if is_group:
-            # 異步檢查並同步群組摘要資訊 (名稱與頭貼)，不阻塞當前歷史訊息請求
+            # 異步檢查並同步群組摘要資訊 (名稱與頭貼)，先於主執行緒擷取租戶 DB URL 與 Token，不阻塞當前歷史訊息請求
             if user_id.startswith('C'):
                 import threading
                 from endpoints.customers import sync_group_summary_info
-                threading.Thread(target=sync_group_summary_info, args=(app_id, user_id, False), daemon=True).start()
+                tenant_db_url = getattr(g, 'current_db_url', None)
+                oa_cfg = getattr(g, 'current_oa_config', None)
+                line_token = oa_cfg.other_settings.get('line_token') if (oa_cfg and oa_cfg.other_settings) else None
+                threading.Thread(
+                    target=sync_group_summary_info,
+                    args=(app_id, user_id, False, tenant_db_url, line_token),
+                    daemon=True
+                ).start()
 
             # 群組歷史訊息：使用 LEFT JOIN LATERAL 關聯發話成員的姓名與頭像，徹底杜絕 N+1 查詢
             lateral_join = f"""
@@ -2653,7 +2660,7 @@ def get_users_list():
                        WHEN u.is_group THEN 
                            COALESCE(
                                NULLIF((SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.group_id AND name = 'pic' LIMIT 1), ''),
-                               'https://cdn-icons-png.flaticon.com/512/166/166258.png'
+                               ''
                            )
                        ELSE (SELECT value FROM "Private_var:{app_id}" WHERE user_id = u.user_id AND name = 'pic' LIMIT 1)
                    END as pic,
@@ -2684,6 +2691,26 @@ def get_users_list():
         cur.execute(query, params)
         users = cur.fetchall()
         print(f"DEBUG: get_users_list found {len(users)} users for app_id {app_id}")
+
+        # 偵測清單中尚未取得真實名稱且未退群的 C 開頭群組，於背景單一執行緒非同步補齊（受 5 分鐘冷卻節流保護，不阻塞列表回應）
+        missing_group_ids = [
+            u.get('group_id') for u in users
+            if u.get('is_group')
+            and str(u.get('group_id') or '').startswith('C')
+            and not u.get('is_left')
+            and (not u.get('name') or str(u.get('name')).startswith('群組('))
+        ]
+        if missing_group_ids:
+            import threading
+            from endpoints.customers import sync_missing_groups_batch
+            tenant_db_url = getattr(g, 'current_db_url', None)
+            oa_cfg = getattr(g, 'current_oa_config', None)
+            line_token = oa_cfg.other_settings.get('line_token') if (oa_cfg and oa_cfg.other_settings) else None
+            threading.Thread(
+                target=sync_missing_groups_batch,
+                args=(app_id, missing_group_ids, tenant_db_url, line_token),
+                daemon=True
+            ).start()
 
         cur.close()
         return json_response(users)

@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## [2026-11-24] - 訊息中心頭貼快取修復與群組資訊背景熱更新修正
+### Fixed & Improved (修復與優化)
+- **前端頭貼元件快取與狀態機競態修復 (`frontend/src/components/UserAvatar.jsx`)**：
+  - 修正 `useEffect([picUrl])` 無條件將 `status` 重置回 `'loading'` 的問題，僅在外部傳入的 `picUrl` 與目前 `imgSrc` 確實不同時才重新載入。
+  - 引入 `imgRef` 並於掛載與 `imgSrc` 變更時主動檢查 `imgRef.current.complete && imgRef.current.naturalWidth > 0`，徹底解決切換「全部 / 個人 / 群組」頁籤重掛載或刷新後命中瀏覽器快取導致頭貼永久消失（`opacity: 0`）的異常。
+- **後端背景執行緒多租戶 DB 連線與 Token 傳遞修復 (`backend/db_utils.py`, `backend/endpoints/customers.py`, `backend/app.py`)**：
+  - `db_utils.py`：`get_db_connection()` 存取 Flask `g` 物件前加上 `has_app_context()` 保護，杜絕背景執行緒拋出 `RuntimeError: Working outside of application context.`。
+  - `customers.py`：`sync_group_summary_info()` 擴充支援明確傳入租戶 `db_url` 與 `token`（未傳入時自動透過 `get_tenant_db_url` / `get_line_token` 解析，嚴禁誤連主庫），並新增 5 分鐘冷卻快取（`_group_summary_sync_cooldown`）防範重複呼叫 LINE API；同步新增 `sync_missing_groups_batch()` 支援單一背景執行緒批次補齊（單次上限 10 個群組）。
+  - `app.py`：`get_user_history()` 與 `get_users_list()` 啟動背景執行緒前均先於主執行緒擷取租戶 `db_url` 與 `line_token` 傳入。
+- **左側群組列表非同步熱更新與移除外部預設圖 (`backend/app.py`)**：
+  - `get_users_list()` 維持零同步外部 HTTP 阻塞原則，於回傳前偵測仍為預設名稱且未退群的 `C` 開頭群組，交由單一背景守護執行緒非同步補齊真實群組名稱與頭貼。
+  - 移除 SQL 中群組查無 `pic` 時的 flaticon 外部靜態圖網址 fallback，改回傳空字串 `''`，交由前端 `<UserAvatar isGroup={true} />` 統一呈現經典黃色群組圖示。
+
 ## [2026-11-23] - 修正離開圖文選單編輯後再次進入底圖消失問題
 ### Fixed (修復)
 - **離開編輯視圖同步清理狀態 (`frontend/src/pages/RichMenu.jsx`)**：

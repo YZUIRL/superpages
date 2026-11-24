@@ -1,6 +1,6 @@
 
 import psycopg2
-from flask import g
+from flask import g, has_app_context
 import os
 from psycopg2 import pool
 
@@ -73,12 +73,12 @@ def get_main_db_connection():
 
 def get_db_connection(db_url=None):
     """Get a database connection from a pool. Supports dynamic DB URLs."""
-    if not db_url:
+    if not db_url and has_app_context():
         db_url = getattr(g, 'current_db_url', None)
     
     # CRITICAL FIX: If we have an OA ID but no DB URL, do NOT fallback to RDS.
     # This happens if the Main RDS was too busy to provide the config during load_oa_context.
-    oa_id = getattr(g, 'current_oa_id', None)
+    oa_id = getattr(g, 'current_oa_id', None) if has_app_context() else None
     if not db_url and oa_id:
         print(f"CRITICAL: Request for OA {oa_id} has no DB URL. Refusing to fallback to Main RDS.")
         raise Exception("系統連線繁忙，請稍後再試。")
